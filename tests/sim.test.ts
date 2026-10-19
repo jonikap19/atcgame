@@ -131,13 +131,37 @@ describe('drawn paths', () => {
     }
   });
 
+  it('joins a turn ahead of the plane instead of doubling back', () => {
+    const g = quietGame(270);
+    const ac = g.spawnArrivalAt(vec(400, 600), 90, 6000, 500);
+    // The player draws a left turn starting at the plane...
+    const stroke = [];
+    for (let i = 1; i <= 10; i++) stroke.push(vec(400 + i * 10, 600));
+    for (let i = 1; i <= 40; i++) stroke.push(vec(500 + Math.sin(i / 25) * 60, 600 - i * 10));
+    // ...but takes 3 seconds, so the plane has flown on past the corner.
+    run(g, 3);
+    g.commandPath(ac, stroke);
+    let lastY = ac.pos.y;
+    for (let i = 0; i < 40; i++) {
+      run(g, 0.25);
+      // Never turns back towards where the line started...
+      expect(Math.abs(angleDiff(ac.heading, 270))).toBeGreaterThan(45);
+      // ...and never flies back south once it's on its way north.
+      expect(ac.pos.y).toBeLessThanOrEqual(lastY + 0.5);
+      lastY = ac.pos.y;
+    }
+    expect(ac.pos.y).toBeLessThan(350);
+    // It ends up flying along the drawn line (x ≈ 540–560 here).
+    expect(Math.abs(ac.pos.x - 550)).toBeLessThan(20);
+  });
+
   it('still flies a loop drawn later in the line', () => {
     const g = quietGame(270);
     const ac = g.spawnArrivalAt(vec(300, 300), 90, 6000, 500);
     const stroke = [vec(300, 300), vec(500, 300), vec(500, 450), vec(320, 450), vec(320, 310), vec(700, 310)];
     g.commandPath(ac, stroke);
-    expect(ac.path[0]).toMatchObject({ x: 500, y: 300 });
-    expect(ac.path.some((p) => p.x === 320 && p.y === 450)).toBe(true);
+    // The loop's far side (x ≈ 320, y ≈ 450) is still part of the path.
+    expect(ac.path.some((p) => p.x < 360 && p.y > 420)).toBe(true);
   });
 });
 

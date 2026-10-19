@@ -1,5 +1,5 @@
 import { type Airport, type GateId, gateNear, inCone, liftoffPoint } from './airport';
-import { type Vec, angleDiff, closestOnSegment, dist, headingTo } from './geom';
+import { type Vec, angleDiff, dist, headingTo } from './geom';
 
 /**
  * A saved route any suitable plane can be sent onto.
@@ -31,25 +31,6 @@ export function simplify(points: Vec[], spacing = 10, maxPoints = 240): Vec[] {
   const last = points[points.length - 1];
   if (out[out.length - 1] !== last && dist(last, out[out.length - 1]) > 2) out.push(last);
   return out.slice(0, maxPoints);
-}
-
-/**
- * Cuts a drawn path so a plane joins it at the point nearest to where the plane
- * is now. The plane keeps flying while the player draws, so without this it
- * would turn back to reach the start of the line.
- */
-export function trimToNearest(pos: Vec, points: Vec[]): Vec[] {
-  if (points.length < 2) return points.slice();
-  const hits = [];
-  for (let i = 0; i < points.length - 1; i++) {
-    const p = closestOnSegment(pos, points[i], points[i + 1]);
-    hits.push({ i, p, d: dist(pos, p) });
-  }
-  const best = Math.min(...hits.map((h) => h.d));
-  // Take the earliest part of the line that is about as close, so a loop
-  // drawn later that passes near the plane is still flown.
-  const hit = hits.find((h) => h.d <= best + 20) ?? hits[0];
-  return [hit.p, ...points.slice(hit.i + 1)];
 }
 
 /** Works out what kind of route a drawn stroke is. */

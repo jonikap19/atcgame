@@ -33,15 +33,6 @@ export const headingVec = (heading: number): Vec => ({
 export const headingTo = (a: Vec, b: Vec): number =>
   norm360(Math.atan2(b.x - a.x, -(b.y - a.y)) / RAD);
 
-/** The point on segment a–b closest to p. */
-export function closestOnSegment(p: Vec, a: Vec, b: Vec): Vec {
-  const ab = sub(b, a);
-  const lenSq = dot(ab, ab);
-  if (lenSq === 0) return { ...a };
-  const t = clamp(dot(sub(p, a), ab) / lenSq, 0, 1);
-  return { x: a.x + ab.x * t, y: a.y + ab.y * t };
-}
-
 export function pathLength(points: Vec[]): number {
   let total = 0;
   for (let i = 1; i < points.length; i++) total += dist(points[i - 1], points[i]);

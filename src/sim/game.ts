@@ -46,7 +46,8 @@ import {
 } from './constants';
 import { type Vec, angleDiff, clamp, dist, headingTo, norm360, pathLength, vec } from './geom';
 import { Rng } from './rng';
-import { ROUTE_COLORS, type Route, classifyRoute, simplify, trimToNearest } from './routes';
+import { fitTrack } from './pathfit';
+import { ROUTE_COLORS, type Route, classifyRoute, simplify } from './routes';
 
 export type Difficulty = 'calm' | 'normal' | 'busy';
 export type Tone = 'info' | 'good' | 'warn' | 'bad';
@@ -220,9 +221,9 @@ export class Game {
     return ac.alt - DESCENT_RATE * seconds <= allowed;
   }
 
-  /** The part of a drawn stroke the plane will actually fly, from where it is now. */
+  /** The smoothed path a plane will fly for a line drawn from it. */
   pathFromStroke(ac: Aircraft, rawPoints: Vec[]): Vec[] {
-    return simplify(trimToNearest(ac.pos, rawPoints)).filter((p) => dist(p, ac.pos) > 12);
+    return fitTrack(ac.pos, ac.heading, ac.speed, rawPoints);
   }
 
   commandPath(ac: Aircraft, rawPoints: Vec[]): PathPlan | null {
@@ -234,25 +235,21 @@ export class Game {
     ac.holding = false;
     ac.routeId = null;
     ac.landingEnd = null;
+    ac.path = points;
+    ac.pathEnd = NO_PATH_END;
     switch (plan.kind) {
       case 'join':
-        ac.path = [{ ...plan.route.points[0] }];
         ac.pathEnd = { type: 'route', routeId: plan.route.id };
         if (plan.route.kind === 'arr' && plan.route.endId) clearForApproach(ac, plan.route.endId);
         break;
       case 'land':
-        ac.path = points;
         ac.pathEnd = { type: 'land', endId: plan.end.id };
         clearForApproach(ac, plan.end.id);
         break;
       case 'inactive':
-        ac.path = points;
-        ac.pathEnd = NO_PATH_END;
         this.say(`RWY ${plan.end.id} NOT IN USE — WIND FAVOURS ${this.activeEnds().map((e) => e.id).join('/')}`, 'warn');
         break;
       case 'free':
-        ac.path = points;
-        ac.pathEnd = NO_PATH_END;
         break;
     }
     return plan;

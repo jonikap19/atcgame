@@ -15,6 +15,9 @@ import {
   TURN_RATE,
   WP_RADIUS,
 } from './constants';
+
+/** How far ahead along its path a plane aims. */
+const LOOKAHEAD = 40;
 import { type Vec, angleDiff, clamp, dist, headingTo, headingVec, norm360, sub, mul } from './geom';
 import type { Route } from './routes';
 
@@ -101,7 +104,18 @@ function flyEnroute(ac: Aircraft, dt: number, ctx: FlightContext): void {
   if (ac.holding) {
     ac.heading = norm360(ac.heading + HOLD_TURN_RATE * dt);
   } else {
-    // Drop waypoints we've reached, or that are now close behind us.
+    // Progress along the path: skip to the nearest of the next few points...
+    let nearest = 0;
+    let nearestD = Infinity;
+    for (let i = 0; i < Math.min(ac.path.length, 10); i++) {
+      const d = dist(ac.pos, ac.path[i]);
+      if (d < nearestD) {
+        nearest = i;
+        nearestD = d;
+      }
+    }
+    if (nearest > 0) ac.path.splice(0, nearest);
+    // ...then drop points we've reached, or that are now close behind us.
     while (ac.path.length) {
       const wp = ac.path[0];
       const d = dist(ac.pos, wp);
@@ -110,7 +124,9 @@ function flyEnroute(ac: Aircraft, dt: number, ctx: FlightContext): void {
       else break;
     }
     if (ac.path.length) {
-      steer(ac, headingTo(ac.pos, ac.path[0]), TURN_RATE, dt);
+      // Aim a little way down the path so turns are smooth instead of overshooting.
+      const aim = ac.path.find((p) => dist(ac.pos, p) >= LOOKAHEAD) ?? ac.path[ac.path.length - 1];
+      steer(ac, headingTo(ac.pos, aim), TURN_RATE, dt);
     } else if (ac.pathEnd.type === 'route') {
       const routeId = ac.pathEnd.routeId;
       const route = ctx.routes.find((r) => r.id === routeId);
