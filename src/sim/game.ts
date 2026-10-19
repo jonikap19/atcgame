@@ -46,7 +46,7 @@ import {
 } from './constants';
 import { type Vec, angleDiff, clamp, dist, headingTo, norm360, pathLength, vec } from './geom';
 import { Rng } from './rng';
-import { ROUTE_COLORS, type Route, classifyRoute, simplify } from './routes';
+import { ROUTE_COLORS, type Route, classifyRoute, simplify, trimToNearest } from './routes';
 
 export type Difficulty = 'calm' | 'normal' | 'busy';
 export type Tone = 'info' | 'good' | 'warn' | 'bad';
@@ -220,9 +220,14 @@ export class Game {
     return ac.alt - DESCENT_RATE * seconds <= allowed;
   }
 
+  /** The part of a drawn stroke the plane will actually fly, from where it is now. */
+  pathFromStroke(ac: Aircraft, rawPoints: Vec[]): Vec[] {
+    return simplify(trimToNearest(ac.pos, rawPoints)).filter((p) => dist(p, ac.pos) > 12);
+  }
+
   commandPath(ac: Aircraft, rawPoints: Vec[]): PathPlan | null {
     if (ac.phase !== 'enroute' && ac.phase !== 'final') return null;
-    const points = simplify(rawPoints.filter((p) => dist(p, ac.pos) > 12));
+    const points = this.pathFromStroke(ac, rawPoints);
     if (points.length === 0) return null;
     const plan = this.planPath(ac, points);
     ac.phase = 'enroute';

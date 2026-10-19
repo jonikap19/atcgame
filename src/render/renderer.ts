@@ -428,7 +428,9 @@ export class Renderer {
     }
     const ac = game.aircraft.find((a) => a.id === s.aircraftId);
     if (!ac) return;
-    const plan: PathPlan = game.planPath(ac, s.points);
+    const path = game.pathFromStroke(ac, s.points);
+    if (path.length === 0) return;
+    const plan: PathPlan = game.planPath(ac, path);
     const [color, label] =
       plan.kind === 'land'
         ? plan.tooHigh
@@ -439,7 +441,11 @@ export class Renderer {
           : plan.kind === 'inactive'
             ? [C.alert, `RWY ${plan.end.id} NOT IN USE`]
             : [C.sel, ''];
-    this.line([ac.pos, ...s.points], color, 2);
+    // Show the whole stroke faintly, and the part the plane will fly brightly.
+    this.ctx.globalAlpha = 0.3;
+    this.line(s.points, color, 1.5);
+    this.ctx.globalAlpha = 1;
+    this.line([ac.pos, ...path], color, 2);
     if (label) this.hint(label, lp, color);
   }
 

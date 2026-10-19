@@ -114,6 +114,33 @@ describe('arrivals', () => {
   });
 });
 
+describe('drawn paths', () => {
+  it('joins the line where the plane is now, not where drawing started', () => {
+    const g = quietGame(270);
+    const ac = g.spawnArrivalAt(vec(300, 200), 90, 6000, 500);
+    // The player starts drawing at the plane and keeps going east, slowly.
+    const stroke = [];
+    for (let x = 300; x <= 1200; x += 10) stroke.push(vec(x, 200));
+    run(g, 5); // plane flies ~150 units while the line is drawn
+    g.commandPath(ac, stroke);
+    expect(ac.path[0].x).toBeGreaterThan(ac.pos.x - 15);
+    // It should carry on east instead of turning back towards x = 300.
+    for (let i = 0; i < 6; i++) {
+      run(g, 0.5);
+      expect(Math.abs(angleDiff(ac.heading, 90))).toBeLessThan(20);
+    }
+  });
+
+  it('still flies a loop drawn later in the line', () => {
+    const g = quietGame(270);
+    const ac = g.spawnArrivalAt(vec(300, 300), 90, 6000, 500);
+    const stroke = [vec(300, 300), vec(500, 300), vec(500, 450), vec(320, 450), vec(320, 310), vec(700, 310)];
+    g.commandPath(ac, stroke);
+    expect(ac.path[0]).toMatchObject({ x: 500, y: 300 });
+    expect(ac.path.some((p) => p.x === 320 && p.y === 450)).toBe(true);
+  });
+});
+
 describe('separation', () => {
   it('treats 1000 ft of vertical spacing as separated', () => {
     const g = quietGame(270);
