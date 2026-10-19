@@ -105,6 +105,28 @@ function approach(current: number, target: number, up: number, down: number, dt:
   return Math.max(target, current - down * dt);
 }
 
+/**
+ * Which points a plane can fly to from where it is. A point inside either of
+ * the circles it flies at full turn can't be reached without first flying away
+ * and coming back. Steering straight at one makes the plane circle it forever.
+ * Points just behind the plane have already been passed.
+ */
+function reachability(ac: Aircraft): { canTarget(p: Vec): boolean } {
+  const r = turnRadius(Math.max(ac.speed, 120));
+  const fwd = headingVec(ac.heading);
+  const right = { x: -fwd.y, y: fwd.x };
+  const centres = [add(ac.pos, mul(right, r)), sub(ac.pos, mul(right, r))];
+  return {
+    canTarget(p: Vec): boolean {
+      const d = dist(ac.pos, p);
+      if (d < WP_RADIUS) return false;
+      const behind = Math.abs(angleDiff(ac.heading, headingTo(ac.pos, p))) > 90;
+      if (behind && d < r * 2) return false;
+      return centres.every((c) => dist(p, c) >= r);
+    },
+  };
+}
+
 /** A hold that starts circling from where the plane is now, turning right. */
 export function holdHere(ac: Aircraft): Hold {
   const radius = turnRadius(ac.speed) * 1.15;
@@ -123,6 +145,24 @@ function flyHold(ac: Aircraft, hold: Hold, dt: number): void {
   steer(ac, norm360(tangent + correction), TURN_RATE, dt);
 }
 
+/** The plane has flown its whole path: do whatever was planned for the end of it. */
+function finishPath(ac: Aircraft, ctx: FlightContext): void {
+  const end = ac.pathEnd;
+  if (end.type === 'route') {
+    const route = ctx.routes.find((r) => r.id === end.routeId);
+    if (route) applyRoute(ac, route);
+    else ac.pathEnd = NO_PATH_END;
+  } else if (end.type === 'hold') {
+    ac.hold = end.hold;
+    ac.pathEnd = NO_PATH_END;
+  } else if (end.type === 'land') {
+    ac.phase = 'final';
+    ac.landingEnd = end.endId;
+    ac.pathEnd = NO_PATH_END;
+    ac.routeId = null;
+  }
+}
+
 function flyEnroute(ac: Aircraft, dt: number, ctx: FlightContext): void {
   if (ac.hold && ac.path.length === 0) {
     flyHold(ac, ac.hold, dt);
@@ -138,32 +178,19 @@ function flyEnroute(ac: Aircraft, dt: number, ctx: FlightContext): void {
       }
     }
     if (nearest > 0) ac.path.splice(0, nearest);
-    // ...then drop points we've reached, or that are now close behind us.
-    while (ac.path.length) {
-      const wp = ac.path[0];
-      const d = dist(ac.pos, wp);
-      const behind = d < 45 && Math.abs(angleDiff(ac.heading, headingTo(ac.pos, wp))) > 100;
-      if (d < WP_RADIUS || behind) ac.path.shift();
-      else break;
-    }
+    // ...then drop points the plane has reached or can no longer reach without circling.
+    const reach = reachability(ac);
+    while (ac.path.length && !reach.canTarget(ac.path[0])) ac.path.shift();
     if (ac.path.length) {
-      // Aim a little way down the path so turns are smooth instead of overshooting.
-      const aim = ac.path.find((p) => dist(ac.pos, p) >= LOOKAHEAD) ?? ac.path[ac.path.length - 1];
-      steer(ac, headingTo(ac.pos, aim), TURN_RATE, dt);
-    } else if (ac.pathEnd.type === 'route') {
-      const routeId = ac.pathEnd.routeId;
-      const route = ctx.routes.find((r) => r.id === routeId);
-      if (route) applyRoute(ac, route);
-      else ac.pathEnd = NO_PATH_END;
-    } else if (ac.pathEnd.type === 'hold') {
-      ac.hold = ac.pathEnd.hold;
-      ac.pathEnd = NO_PATH_END;
-    } else if (ac.pathEnd.type === 'land') {
-      ac.phase = 'final';
-      ac.landingEnd = ac.pathEnd.endId;
-      ac.pathEnd = NO_PATH_END;
-      ac.routeId = null;
+      // Aim a little way down the path so turns are smooth instead of overshooting,
+      // but only ever at a point the plane can actually fly to.
+      const aim =
+        ac.path.find((p) => dist(ac.pos, p) >= LOOKAHEAD && reach.canTarget(p)) ??
+        [...ac.path].reverse().find((p) => reach.canTarget(p));
+      if (aim) steer(ac, headingTo(ac.pos, aim), TURN_RATE, dt);
+      else ac.path = [];
     }
+    if (ac.path.length === 0) finishPath(ac, ctx);
   }
   ac.alt = approach(ac.alt, ac.targetAlt, CLIMB_RATE, DESCENT_RATE, dt);
   ac.speed = approach(ac.speed, ac.targetSpeed, ACCEL, ACCEL, dt);
