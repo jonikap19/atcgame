@@ -190,7 +190,7 @@ summary:focus-visible {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  top: var(--hud-top, 60px);
+  top: var(--overlay-top, var(--hud-top, 60px));
   background: var(--panel);
   border: 1px solid var(--warn);
   color: var(--warn);
@@ -201,7 +201,7 @@ summary:focus-visible {
   letter-spacing: 0.08em;
   font-size: 13px;
   white-space: nowrap;
-  max-width: calc(100% - 32px);
+  max-width: calc(100% - 96px);
   overflow: hidden;
   text-overflow: ellipsis;
   pointer-events: none;
@@ -209,7 +209,7 @@ summary:focus-visible {
 
 #toasts {
   position: absolute;
-  top: calc(var(--hud-top, 60px) + 38px);
+  top: calc(var(--overlay-top, var(--hud-top, 60px)) + 38px);
   left: 50%;
   transform: translateX(-50%);
   margin: 0;
@@ -220,7 +220,7 @@ summary:focus-visible {
   align-items: center;
   gap: 4px;
   pointer-events: none;
-  width: min(560px, calc(100% - 32px));
+  width: min(560px, calc(100% - 96px));
 }
 #toasts li {
   background: rgba(15, 29, 38, 0.92);
@@ -635,4 +635,26 @@ summary:focus-visible {
 
 .sel-status .ok {
   color: var(--accent);
+}
+
+.sel-limits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.sel-limits .k {
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--ink-dim);
+  font-weight: 600;
+  align-self: center;
+}
+.sel-limits .ok {
+  color: var(--accent);
+}
+.sel-limits .over {
+  color: var(--warn);
 }

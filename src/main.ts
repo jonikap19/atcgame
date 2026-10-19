@@ -1,6 +1,7 @@
 import './style.css';
 import { Renderer } from './render/renderer';
 import { View } from './render/view';
+import { gateSegment } from './sim/airport';
 import { type Difficulty, Game } from './sim/game';
 import { Hud, fmtTime } from './ui/hud';
 import { attachInput } from './ui/input';
@@ -94,13 +95,79 @@ class App {
     } else if (w >= WIDE) {
       // Wide screens: the map fills the height; panels float over its lower corners.
       const side = Math.max(10, Math.min(120, (w - 1.6 * (h - top)) / 2));
-      this.view.fit(w, h, { top: top + 4, right: side, bottom: 10, left: side });
+      this.view.fit(w, h, { top: top + 18, right: side, bottom: 18, left: side });
     } else {
       // Narrow screens: panels dock along the bottom.
       const dock = Math.max(130, Math.min(190, h * 0.24));
       document.documentElement.style.setProperty('--dock-h', `${Math.round(dock)}px`);
-      this.view.fit(w, h, { top: top + 4, right: 6, bottom: dock + 14, left: 6 });
+      // Leave a gap above the dock so exits on the map's bottom edge stay clear of it.
+      this.view.fit(w, h, { top: top + 18, right: 6, bottom: dock + 40, left: 6 });
     }
+    if (playing) this.keepExitsClear(w, h, top);
+  }
+
+  /**
+   * Places the panels, wind banner and messages so they never cover an exit
+   * gate. Each panel sits as low as it can in its column, but stops above any
+   * gate there (and scrolls inside if that makes it shorter than its content).
+   */
+  private keepExitsClear(w: number, h: number, top: number): void {
+    const game = this.game;
+    if (!game) return;
+    const pad = 30;
+    const gates = game.airport.gates.map((g) => {
+      const [a, b] = gateSegment(g).map((p) => this.view.toScreen(p));
+      return {
+        x0: Math.min(a.x, b.x) - pad,
+        x1: Math.max(a.x, b.x) + pad,
+        y0: Math.min(a.y, b.y) - pad,
+        y1: Math.max(a.y, b.y) + pad,
+      };
+    });
+
+    // On phones the panels sit in a dock below the map (see layout), so only
+    // the floating corner panels of larger screens need moving.
+    const narrow = w < 760;
+    const columns: [string, number, number, number][] = narrow
+      ? []
+      : [
+          ['deps', 12, 232, 150],
+          ['sel', w - 260, w - 12, 240],
+          ['plan', w - 260, w - 12, 220],
+        ];
+    if (narrow) {
+      for (const id of ['deps', 'sel', 'plan']) {
+        $(id).style.bottom = '';
+        $(id).style.maxHeight = '';
+      }
+    }
+    const margin = 12;
+    for (const [id, x0, x1, minH] of columns) {
+      // Gates in this column, lowest first.
+      const blocks = gates.filter((r) => r.x1 > x0 && r.x0 < x1).sort((a, b) => b.y1 - a.y1);
+      let bottom = h - margin;
+      for (const r of blocks) {
+        if (r.y0 >= bottom) continue; // entirely below the panel
+        if (r.y1 <= bottom - minH) break; // enough room below this gate
+        bottom = r.y0 - 6; // move up above this gate
+      }
+      let ceiling = top + 8;
+      for (const r of blocks) if (r.y1 <= bottom && r.y1 + 6 > ceiling) ceiling = r.y1 + 6;
+      const el = $(id);
+      el.style.bottom = `${Math.round(h - bottom)}px`;
+      el.style.maxHeight = `${Math.round(Math.max(80, bottom - ceiling))}px`;
+    }
+
+    // Wind banner and messages: kept narrower than the map (CSS) so they never
+    // reach the exits on its left and right edges, and placed at the highest
+    // spot below the top bar where they don't overlap an exit at the top or bottom.
+    const half = Math.min(280, (w - 96) / 2);
+    const inSpan = gates.filter((r) => r.x1 > w / 2 - half && r.x0 < w / 2 + half);
+    const band = 32 + 6 + 3 * 27;
+    const base = top + 6;
+    const candidates = [base, ...inSpan.map((r) => r.y1 + 6)].filter((y) => y >= base).sort((p, q) => p - q);
+    const overlayTop = candidates.find((y) => inSpan.every((r) => r.y1 <= y || r.y0 >= y + band)) ?? base;
+    document.documentElement.style.setProperty('--overlay-top', `${Math.round(overlayTop)}px`);
   }
 
   // ---------------------------------------------------------------- menu

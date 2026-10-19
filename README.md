@@ -16,6 +16,13 @@ It's inspired by casual radar ATC games, with the things I wanted in them:
   Any plane can join a route by being dragged onto its start ring.
 - **Wind shifts.** Every few minutes the wind swings round. You get a 45-second
   warning, then landings and takeoffs swap to the other end of the runways.
+- **Landing limits on the scope.** Each active landing cone is labelled with
+  the most a plane may be when it enters: 4500 ft (`045`) and 220 kt. Faster
+  or higher means a go-around. The selected plane's panel shows the same
+  limits, in amber while the plane is still outside them.
+- **Fair arrivals.** New arrivals appear at a random spot on the edge, well
+  away from the exit gates, and at a level where nothing will come near them
+  in their first 20 seconds.
 - **Conflict prediction.** A dashed amber ring means two planes will lose
   separation within about 20 seconds. A red ring means they already have.
 

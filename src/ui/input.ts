@@ -82,6 +82,8 @@ export function attachInput(canvas: HTMLCanvasElement, host: InputHost): void {
     const plan = game.commandPath(ac, stroke.points);
     if (plan?.kind === 'land' && plan.tooHigh) {
       game.say(`${ac.callsign} MAY BE TOO HIGH FOR ${plan.end.id} — DESCEND NOW`, 'warn');
+    } else if (plan?.kind === 'land' && plan.tooFast) {
+      game.say(`${ac.callsign} MAY BE TOO FAST FOR ${plan.end.id} — SLOW DOWN NOW`, 'warn');
     }
   };
   canvas.addEventListener('pointerup', (e) => finish(e, false));

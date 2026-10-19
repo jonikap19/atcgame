@@ -14,12 +14,15 @@ import {
   type RunwayEnd,
   approachCoords,
   gateAt,
+  gateNear,
   glideAltitude,
   inCone,
   makeAirport,
 } from './airport';
 import {
+  ACCEL,
   ALT_STEP,
+  APPROACH_MAX_SPEED,
   ARR_ALT,
   ARR_SPD,
   COLLIDE_H,
@@ -40,12 +43,13 @@ import {
   SCORE,
   SEP_H,
   SEP_V,
+  SPAWN_GATE_CLEARANCE,
   SPD_STEP,
   WIND_WARNING,
   WORLD_H,
   WORLD_W,
 } from './constants';
-import { type Vec, angleDiff, clamp, dist, headingTo, norm360, pathLength, vec } from './geom';
+import { type Vec, angleDiff, clamp, dist, headingTo, headingVec, norm360, pathLength, vec } from './geom';
 import { Rng } from './rng';
 import { type Hold, detectEndLoop, fitTrack, turnRadius } from './pathfit';
 import { ROUTE_COLORS, type Route, classifyRoute, simplify } from './routes';
@@ -91,7 +95,7 @@ export type PathPlan =
   | { kind: 'free' }
   | { kind: 'join'; route: Route }
   | { kind: 'hold'; hold: Hold }
-  | { kind: 'land'; end: RunwayEnd; tooHigh: boolean }
+  | { kind: 'land'; end: RunwayEnd; tooHigh: boolean; tooFast: boolean }
   | { kind: 'inactive'; end: RunwayEnd };
 
 export interface GameOptions {
@@ -201,7 +205,13 @@ export class Game {
       const end = Object.values(this.airport.ends).find((e) => inCone(e, last));
       if (end) {
         if (!this.isActive(end.id)) return { kind: 'inactive', end };
-        return { kind: 'land', end, tooHigh: !this.canDescendInTime(ac, [ac.pos, ...points], end) };
+        const path = [ac.pos, ...points];
+        return {
+          kind: 'land',
+          end,
+          tooHigh: !this.canDescendInTime(ac, path, end),
+          tooFast: !this.canSlowInTime(ac, path),
+        };
       }
     }
     return { kind: 'free' };
@@ -211,6 +221,12 @@ export class Game {
     if (r.kind === 'arr') return ac.kind === 'arr' && !!r.endId && this.isActive(r.endId);
     if (r.kind === 'dep') return ac.kind === 'dep';
     return true;
+  }
+
+  /** Rough check: can the plane slow to approach speed by the end of this path? */
+  private canSlowInTime(ac: Aircraft, path: Vec[]): boolean {
+    const seconds = pathLength(path) / (Math.max(150, Math.min(ac.speed, 230)) * KT_TO_UPS);
+    return ac.speed - ACCEL * seconds <= APPROACH_MAX_SPEED;
   }
 
   /** Rough check: can the plane get down onto the glide path by the end of this path? */
@@ -437,6 +453,8 @@ export class Game {
         const glide = glideAltitude(along, GLIDE_ENTRY_ALT);
         if (ac.alt > glide + GLIDE_TOLERANCE || (along < 40 && ac.alt > 600)) {
           this.goAround(ac, 'TOO HIGH');
+        } else if (ac.speed > APPROACH_MAX_SPEED + 5) {
+          this.goAround(ac, 'TOO FAST');
         } else if (along <= 0) {
           if (this.runwayBusy(end.runwayId, false)) {
             this.goAround(ac, 'RUNWAY OCCUPIED');
@@ -646,30 +664,55 @@ export class Game {
   }
 
   private spawnArrival(): boolean {
+    const spot = this.findArrivalSpawn();
+    if (spot) this.spawnArrivalAt(spot.pos, spot.heading, spot.alt);
+    return !!spot;
+  }
+
+  /**
+   * Picks a safe place on the map edge for a new arrival: well away from the
+   * exit gates (departures fly out there), and at an altitude where nothing
+   * will come close to it in the next 20 seconds. Null if there's no room now.
+   */
+  findArrivalSpawn(): { pos: Vec; heading: number; alt: number } | null {
     const cfg = SETTINGS[this.difficulty];
-    for (let attempt = 0; attempt < 12; attempt++) {
+    // Where existing traffic will be over the next 20 s.
+    const ctx = this.ctx;
+    const ghosts = this.aircraft.map(cloneForPrediction);
+    const future: { pos: Vec; alt: number }[][] = [ghosts.map((g) => ({ pos: { ...g.pos }, alt: g.alt }))];
+    for (let s = 0; s < 20; s++) {
+      for (const g of ghosts) stepFlight(g, 1, ctx);
+      future.push(ghosts.map((g) => ({ pos: { ...g.pos }, alt: g.alt })));
+    }
+    const levels: number[] = [];
+    for (let a = cfg.alt[0]; a <= cfg.alt[1]; a += 1000) levels.push(a);
+
+    for (let attempt = 0; attempt < 30; attempt++) {
       const side = this.rng.int(0, 3);
       const pos =
         side === 0
-          ? vec(this.rng.range(80, WORLD_W - 80), 1)
+          ? vec(this.rng.range(120, WORLD_W - 120), 1)
           : side === 1
-            ? vec(WORLD_W - 1, this.rng.range(80, WORLD_H - 80))
+            ? vec(WORLD_W - 1, this.rng.range(120, WORLD_H - 120))
             : side === 2
-              ? vec(this.rng.range(80, WORLD_W - 80), WORLD_H - 1)
-              : vec(1, this.rng.range(80, WORLD_H - 80));
-      const nearGate = this.airport.gates.some((g) => {
-        const along = g.side === 'top' || g.side === 'bottom' ? pos.x : pos.y;
-        const onSide = ['top', 'right', 'bottom', 'left'][side] === g.side;
-        return onSide && Math.abs(along - g.center) < g.half + 50;
-      });
-      if (nearGate) continue;
-      if (this.aircraft.some((a) => dist(a.pos, pos) < 160)) continue;
+              ? vec(this.rng.range(120, WORLD_W - 120), WORLD_H - 1)
+              : vec(1, this.rng.range(120, WORLD_H - 120));
+      if (gateNear(this.airport, pos, SPAWN_GATE_CLEARANCE)) continue;
       const heading = norm360(headingTo(pos, this.airport.center) + this.rng.range(-20, 20));
-      const alt = Math.round(this.rng.range(cfg.alt[0], cfg.alt[1]) / 1000) * 1000;
-      this.spawnArrivalAt(pos, heading, alt);
-      return true;
+      const v = headingVec(heading);
+      const step = 250 * KT_TO_UPS;
+      const safeAt = (alt: number): boolean =>
+        future.every((frame, s) => {
+          const me = vec(pos.x + v.x * step * s, pos.y + v.y * step * s);
+          return frame.every((o) => dist(o.pos, me) >= SEP_H * 2 || Math.abs(o.alt - alt) >= SEP_V);
+        });
+      const start = this.rng.int(0, levels.length - 1);
+      for (let k = 0; k < levels.length; k++) {
+        const alt = levels[(start + k) % levels.length];
+        if (safeAt(alt)) return { pos, heading, alt };
+      }
     }
-    return false;
+    return null;
   }
 
   spawnArrivalAt(pos: Vec, heading: number, alt: number, fuel?: number): Aircraft {

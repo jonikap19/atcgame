@@ -1,6 +1,16 @@
 import type { Aircraft } from '../sim/aircraft';
 import { type RunwayEnd, conePolygon, gateOutHeading, gatePoint, gateSegment } from '../sim/airport';
-import { KT_TO_UPS, LOW_FUEL, ROUTE_ENTRY_R, SEP_H, WORLD_H, WORLD_W } from '../sim/constants';
+import {
+  APPROACH_MAX_ALT,
+  APPROACH_MAX_SPEED,
+  CONE_LEN,
+  KT_TO_UPS,
+  LOW_FUEL,
+  ROUTE_ENTRY_R,
+  SEP_H,
+  WORLD_H,
+  WORLD_W,
+} from '../sim/constants';
 import type { Game, PathPlan } from '../sim/game';
 import type { Hold } from '../sim/pathfit';
 import { type Vec, headingVec, vec } from '../sim/geom';
@@ -160,8 +170,22 @@ export class Renderer {
     ctx.stroke();
     ctx.setLineDash([]);
     const back = headingVec(end.heading + 180);
-    const far = vec(end.threshold.x + back.x * 330, end.threshold.y + back.y * 330);
+    const far = vec(end.threshold.x + back.x * CONE_LEN, end.threshold.y + back.y * CONE_LEN);
     this.line([end.threshold, far], stroke, 1, [2, 8]);
+  }
+
+  /** "MAX 045 · 220KT" beyond the mouth of a landing cone. */
+  private drawApproachLimits(end: RunwayEnd): void {
+    const back = headingVec(end.heading + 180);
+    const at = vec(end.threshold.x + back.x * (CONE_LEN + 26), end.threshold.y + back.y * (CONE_LEN + 26));
+    const p = this.S(at);
+    const label = `MAX ${alt3(APPROACH_MAX_ALT)} · ${APPROACH_MAX_SPEED}KT`;
+    const ctx = this.ctx;
+    ctx.font = `600 10px ${MONO}`;
+    const w = ctx.measureText(label).width + 8;
+    ctx.fillStyle = 'rgba(10, 20, 27, 0.8)';
+    ctx.fillRect(p.x - w / 2, p.y - 7, w, 14);
+    this.text(label, p, C.cone, 10, 'center', 600);
   }
 
   private drawRunways(game: Game, realTime: number): void {
@@ -173,6 +197,7 @@ export class Renderer {
         this.drawCone(end, 'rgba(160,225,205,0.35)', C.coneFill, [5, 5]);
       } else {
         this.drawCone(end, C.cone, C.coneFill, [5, 4]);
+        this.drawApproachLimits(end);
       }
     }
     if (upcoming.size) {
@@ -451,9 +476,13 @@ export class Renderer {
       plan.kind === 'hold'
         ? [C.sel, `HOLD ${plan.hold.dir > 0 ? 'CLOCKWISE' : 'ANTICLOCKWISE'}`]
         : plan.kind === 'land'
-        ? plan.tooHigh
-          ? [C.warn, `TOO HIGH FOR ${plan.end.id} — DESCEND OR EXTEND`]
-          : [C.good, `CLEARED TO LAND ${plan.end.id}`]
+        ? plan.tooHigh && plan.tooFast
+          ? [C.warn, `TOO HIGH AND FAST FOR ${plan.end.id} — EXTEND THE PATH`]
+          : plan.tooHigh
+            ? [C.warn, `TOO HIGH FOR ${plan.end.id} — DESCEND OR EXTEND`]
+            : plan.tooFast
+              ? [C.warn, `TOO FAST FOR ${plan.end.id} — SLOW TO ${APPROACH_MAX_SPEED} OR EXTEND`]
+              : [C.good, `CLEARED TO LAND ${plan.end.id}`]
         : plan.kind === 'join'
           ? [plan.route.color, `JOIN ${plan.route.name}`]
           : plan.kind === 'inactive'

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { approachCoords, gateAt, inCone, makeAirport } from '../src/sim/airport';
-import { WORLD_H, WORLD_W } from '../src/sim/constants';
+import { stepFlight } from '../src/sim/aircraft';
+import { approachCoords, gateAt, gateNear, inCone, makeAirport } from '../src/sim/airport';
+import { SEP_H, SEP_V, WORLD_H, WORLD_W } from '../src/sim/constants';
 import { Game } from '../src/sim/game';
 import { angleDiff, dist, headingTo, vec } from '../src/sim/geom';
 import { detectEndLoop, turnRadius } from '../src/sim/pathfit';
+import { Rng } from '../src/sim/rng';
 import { classifyRoute } from '../src/sim/routes';
 
 function run(game: Game, seconds: number, dt = 1 / 30): void {
@@ -235,6 +237,63 @@ describe('holding', () => {
     expect(ac.hold).not.toBeNull();
     g.commandPath(ac, [ac.pos, vec(ac.pos.x + 200, ac.pos.y + 200), vec(900, 700)]);
     expect(ac.hold).toBeNull();
+  });
+});
+
+describe('approach limits', () => {
+  it('goes around when too fast on final', () => {
+    const g = quietGame(270);
+    const end = g.airport.ends['27R'];
+    const ac = g.spawnArrivalAt(vec(end.threshold.x + 380, end.threshold.y), 270, 3000, 500);
+    ac.speed = ac.targetSpeed = 280;
+    const plan = g.commandPath(ac, [vec(end.threshold.x + 320, end.threshold.y)]);
+    expect(plan?.kind === 'land' && plan.tooFast).toBe(true);
+    run(g, 10);
+    expect(g.stats.goArounds).toBe(1);
+  });
+
+  it('does not flag a long path as too fast', () => {
+    const g = quietGame(270);
+    const end = g.airport.ends['27R'];
+    const ac = g.spawnArrivalAt(vec(1500, 150), 180, 3000, 500);
+    ac.speed = ac.targetSpeed = 280;
+    const plan = g.planPath(ac, [vec(1500, 455), vec(end.threshold.x + 300, end.threshold.y)]);
+    expect(plan.kind === 'land' && plan.tooFast).toBe(false);
+  });
+});
+
+describe('arrival spawns', () => {
+  it('never appear near an exit gate', () => {
+    for (let seed = 0; seed < 300; seed++) {
+      const g = new Game({ difficulty: 'busy', seed, autoSpawn: false });
+      const spot = g.findArrivalSpawn();
+      expect(spot).not.toBeNull();
+      expect(gateNear(g.airport, spot!.pos, 199)).toBeNull();
+    }
+  });
+
+  it('never appear on a collision course with traffic already there', () => {
+    const g = new Game({ difficulty: 'busy', seed: 4, autoSpawn: false, windDir: 270 });
+    // Crowd the sky with planes heading for the edges at every level.
+    const rng = new Rng(9);
+    for (let i = 0; i < 14; i++) {
+      g.spawnArrivalAt(vec(rng.range(150, 1450), rng.range(150, 850)), rng.range(0, 360), rng.pick([7000, 8000, 9000, 10000, 11000]), 900);
+    }
+    for (let i = 0; i < 100; i++) {
+      const spot = g.findArrivalSpawn();
+      if (!spot) continue;
+      const fresh = g.spawnArrivalAt(spot.pos, spot.heading, spot.alt, 900);
+      const others = g.aircraft.filter((a) => a !== fresh);
+      const ghosts = others.map((a) => ({ ...a, pos: { ...a.pos }, path: [] }));
+      const me = { ...fresh, pos: { ...fresh.pos } };
+      for (let t = 0; t < 15; t++) {
+        for (const o of [...ghosts, me]) stepFlight(o, 1, g.ctx);
+        for (const o of ghosts) {
+          expect(dist(o.pos, me.pos) >= SEP_H || Math.abs(o.alt - me.alt) >= SEP_V).toBe(true);
+        }
+      }
+      g.aircraft = others;
+    }
   });
 });
 

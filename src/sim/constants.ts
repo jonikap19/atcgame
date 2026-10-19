@@ -25,6 +25,10 @@ export const CONE_HALF_ANGLE = 11; // deg
 export const GLIDE_ENTRY_ALT = 3000;
 /** How far above the glide path a plane may be before it must go around. */
 export const GLIDE_TOLERANCE = 1500;
+/** Highest a plane may be when it enters the landing cone. */
+export const APPROACH_MAX_ALT = GLIDE_ENTRY_ALT + GLIDE_TOLERANCE;
+/** Fastest a plane may be on final approach. */
+export const APPROACH_MAX_SPEED = 220;
 
 /** Separation minima. Closer than both = conflict (points drain). */
 export const SEP_H = 70;
@@ -48,6 +52,8 @@ export const EXIT_MIN_ALT = 5000;
 export const LOW_FUEL = 60; // seconds
 
 export const WP_RADIUS = 14;
+/** New arrivals appear at least this far from any exit gate. */
+export const SPAWN_GATE_CLEARANCE = 200;
 export const ROUTE_ENTRY_R = 28;
 export const MAX_ROUTES = 8;
 export const MAX_STRIPS = 4;

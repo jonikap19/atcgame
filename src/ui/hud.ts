@@ -1,6 +1,6 @@
 import type { Aircraft } from '../sim/aircraft';
 import type { Game } from '../sim/game';
-import { LOW_FUEL } from '../sim/constants';
+import { APPROACH_MAX_ALT, APPROACH_MAX_SPEED, EXIT_MIN_ALT, LOW_FUEL } from '../sim/constants';
 import { describeRoute } from '../sim/routes';
 import type { UiState } from './state';
 
@@ -67,6 +67,7 @@ export class Hud {
     cs: HTMLElement;
     kind: HTMLElement;
     status: HTMLElement;
+    limits: HTMLElement;
     alt: HTMLElement;
     spd: HTMLElement;
     hold: HTMLButtonElement;
@@ -82,6 +83,7 @@ export class Hud {
     this.el.sel.innerHTML = `
       <div class="sel-head"><span class="sel-cs"></span><span class="sel-kind"></span></div>
       <div class="sel-status"></div>
+      <div class="sel-limits"></div>
       <div class="ctl"><span class="k">ALT</span>
         <button class="btn" type="button" data-act="alt-" title="Descend 1000 ft (↓)" aria-label="Descend 1000 ft">−</button>
         <span class="v" data-v="alt"></span>
@@ -97,6 +99,7 @@ export class Hud {
       cs: q('.sel-cs'),
       kind: q('.sel-kind'),
       status: q('.sel-status'),
+      limits: q('.sel-limits'),
       alt: q('[data-v="alt"]'),
       spd: q('[data-v="spd"]'),
       hold: q<HTMLButtonElement>('[data-act="hold"]'),
@@ -251,6 +254,18 @@ export class Hud {
     this.set('routes', this.el.routeList, html);
   }
 
+  /** The numbers this plane has to meet: landing limits, or the minimum exit altitude. */
+  private limitsHtml(ac: Aircraft): string {
+    const cls = (bad: boolean): string => (bad ? 'over' : 'ok');
+    if (ac.kind === 'arr') {
+      const high = ac.alt > APPROACH_MAX_ALT;
+      const fast = ac.speed > APPROACH_MAX_SPEED;
+      return `<span class="k">TO LAND</span> <span class="${cls(high)}">ALT ≤ ${alt3(APPROACH_MAX_ALT)}</span> <span class="${cls(fast)}">SPD ≤ ${APPROACH_MAX_SPEED}</span>`;
+    }
+    const low = ac.alt < EXIT_MIN_ALT;
+    return `<span class="k">TO EXIT ${ac.gate ?? ''}</span> <span class="${cls(low)}">ALT ≥ ${alt3(EXIT_MIN_ALT)}</span>`;
+  }
+
   private updateSelected(game: Game, ac: Aircraft): void {
     const sel = this.selEls;
     const can = game.canControl(ac);
@@ -273,6 +288,7 @@ export class Hud {
     sel.cs.style.color = ac.kind === 'arr' ? 'var(--arr)' : 'var(--dep)';
     this.set('sel-kind', sel.kind, `${ac.type} · ${ac.kind === 'arr' ? 'ARRIVAL' : 'DEPARTURE'}`);
     this.set('sel-status', sel.status, status);
+    this.set('sel-limits', sel.limits, this.limitsHtml(ac));
     const altTarget =
       Math.abs(ac.targetAlt - ac.alt) > 60 ? ` <small>${ac.targetAlt > ac.alt ? '↑' : '↓'} ${alt3(ac.targetAlt)}</small>` : '';
     const spdTarget =
