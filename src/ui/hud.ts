@@ -1,5 +1,5 @@
 import type { Aircraft } from '../sim/aircraft';
-import type { Game } from '../sim/game';
+import { EMERGENCY_LABEL, type Game } from '../sim/game';
 import { APPROACH_MAX_ALT, APPROACH_MAX_SPEED, EXIT_MIN_ALT, LOW_FUEL } from '../sim/constants';
 import { describeRoute } from '../sim/routes';
 import type { UiState } from './state';
@@ -59,6 +59,7 @@ export class Hud {
     deps: $('deps'),
   };
   private cache = new Map<string, string>();
+  private bannerSpace = -1;
   private stripRows = new Map<
     number,
     { li: HTMLLIElement; meta: HTMLElement; launch: HTMLElement; sig: string; metaText: string }
@@ -68,6 +69,7 @@ export class Hud {
     kind: HTMLElement;
     status: HTMLElement;
     limits: HTMLElement;
+    alert: HTMLElement;
     alt: HTMLElement;
     spd: HTMLElement;
     hold: HTMLButtonElement;
@@ -83,6 +85,7 @@ export class Hud {
     this.el.sel.innerHTML = `
       <div class="sel-head"><span class="sel-cs"></span><span class="sel-kind"></span></div>
       <div class="sel-status"></div>
+      <div class="sel-alert" hidden></div>
       <div class="sel-limits"></div>
       <div class="ctl"><span class="k">ALT</span>
         <button class="btn" type="button" data-act="alt-" title="Descend 1000 ft (↓)" aria-label="Descend 1000 ft">−</button>
@@ -100,6 +103,7 @@ export class Hud {
       kind: q('.sel-kind'),
       status: q('.sel-status'),
       limits: q('.sel-limits'),
+      alert: q('.sel-alert'),
       alt: q('[data-v="alt"]'),
       spd: q('[data-v="spd"]'),
       hold: q<HTMLButtonElement>('[data-act="hold"]'),
@@ -155,15 +159,17 @@ export class Hud {
     const w = game.wind;
     el.windArrow.style.transform = `rotate(${Math.round(w.dir + 180 + mapRotation)}deg)`;
     this.set('windVal', el.windVal, `${String(Math.round(w.dir)).padStart(3, '0')}° ${w.speed}KT`);
-    this.set('windRwy', el.windRwy, `RWY ${game.activeEnds().map((e) => e.id).join(' ')}`);
+    this.set('windRwy', el.windRwy, `RWY ${game.usableEnds().map((e) => e.id).join(' ') || '—'}`);
     el.wind.classList.toggle('shifting', !!w.pending);
-    if (w.pending) {
-      const left = Math.max(0, Math.ceil(w.pending.at - game.time));
-      const ids = game.upcomingEnds().map((e) => e.id).join(' ');
-      this.set('banner', el.banner, `WIND SHIFT IN ${fmtTime(left)} · RUNWAYS → ${ids}`);
-      el.banner.hidden = false;
-    } else {
-      el.banner.hidden = true;
+    // Wind shifts, runway closures and emergencies, one line each.
+    const notices = game.notices();
+    this.set('banner', el.banner, notices.map((n) => `<div class="${n.tone}">${esc(n.text)}</div>`).join(''));
+    el.banner.hidden = notices.length === 0;
+    // Messages go just below the banner, however many lines it has.
+    const below = el.banner.hidden ? 0 : Math.ceil(el.banner.getBoundingClientRect().height) + 8;
+    if (below !== this.bannerSpace) {
+      this.bannerSpace = below;
+      el.toasts.style.top = `calc(var(--overlay-top, var(--hud-top, 60px)) + ${below}px)`;
     }
 
     this.set(
@@ -215,15 +221,17 @@ export class Hud {
       }
       row.li.classList.toggle('late', wait > 60);
       // Rebuild the launch buttons only when runway availability changes.
-      const sig = active.map((e) => `${e.id}${busy.get(e.runwayId) ? '!' : ''}`).join(',');
+      const blocked = (e: (typeof active)[number]): string | null =>
+        game.isClosed(e.runwayId) ? 'Runway closed' : busy.get(e.runwayId) ? 'Runway busy' : null;
+      const sig = active.map((e) => `${e.id}${blocked(e) ?? ''}`).join(',');
       if (sig !== row.sig) {
         row.sig = sig;
         row.launch.innerHTML = active
           .map(
             (e) =>
               `<button class="btn" type="button" data-strip="${s.id}" data-launch="${e.id}" ${
-                busy.get(e.runwayId) ? 'disabled title="Runway busy"' : `title="Take off from runway ${e.id}"`
-              }>▲ ${e.id}</button>`,
+                blocked(e) ? `disabled title="${blocked(e)}"` : `title="Take off from runway ${e.id}"`
+              }>${game.isClosed(e.runwayId) ? '✕' : '▲'} ${e.id}</button>`,
           )
           .join('');
       }
@@ -242,7 +250,7 @@ export class Hud {
     const html = game.routes.length
       ? game.routes
           .map((r) => {
-            const usable = r.kind !== 'arr' || (r.endId !== null && game.isActive(r.endId));
+            const usable = r.kind !== 'arr' || (r.endId !== null && game.canUse(r.endId));
             return `<li class="route-row">
               <span class="name" style="color:${r.color}">${r.name}</span>
               <span>${describeRoute(r)}${usable ? '' : ' · <span style="color:var(--ink-dim)">NOT IN USE</span>'}</span>
@@ -289,6 +297,15 @@ export class Hud {
     this.set('sel-kind', sel.kind, `${ac.type} · ${ac.kind === 'arr' ? 'ARRIVAL' : 'DEPARTURE'}`);
     this.set('sel-status', sel.status, status);
     this.set('sel-limits', sel.limits, this.limitsHtml(ac));
+    sel.alert.hidden = !ac.emergency;
+    if (ac.emergency) {
+      const extra = ac.emergency.kind === 'engine' ? ' · NO CLIMBING · MAX 200KT' : '';
+      this.set(
+        'sel-alert',
+        sel.alert,
+        `MAYDAY · ${EMERGENCY_LABEL[ac.emergency.kind]} · LAND WITHIN ${fmtTime(ac.emergency.deadline - game.time)}${extra}`,
+      );
+    }
     const altTarget =
       Math.abs(ac.targetAlt - ac.alt) > 60 ? ` <small>${ac.targetAlt > ac.alt ? '↑' : '↓'} ${alt3(ac.targetAlt)}</small>` : '';
     const spdTarget =

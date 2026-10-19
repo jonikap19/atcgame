@@ -1,6 +1,7 @@
 import {
   type Aircraft,
   type FlightContext,
+  type EmergencyKind,
   NO_PATH_END,
   clearForApproach,
   cloneForPrediction,
@@ -32,6 +33,9 @@ import {
   DEP_INITIAL_SPD,
   DEP_SPD,
   DESCENT_RATE,
+  ENGINE_OUT_MAX_SPEED,
+  CLOSURE_DURATION,
+  CLOSURE_WARNING,
   EXIT_MIN_ALT,
   GLIDE_ENTRY_ALT,
   GLIDE_TOLERANCE,
@@ -89,6 +93,23 @@ export interface Stats {
   separationLosses: number;
   diverted: number;
   lost: number;
+  emergencies: number;
+  emergenciesHandled: number;
+}
+
+/** A runway shut for a while (bird strike inspection, debris...). */
+export interface Closure {
+  runwayId: string;
+  reason: string;
+  startsAt: number;
+  endsAt: number;
+  started: boolean;
+}
+
+/** Something the player should know about right now, for the banner. */
+export interface Notice {
+  text: string;
+  tone: 'warn' | 'bad';
 }
 
 export type PathPlan =
@@ -96,7 +117,8 @@ export type PathPlan =
   | { kind: 'join'; route: Route }
   | { kind: 'hold'; hold: Hold }
   | { kind: 'land'; end: RunwayEnd; tooHigh: boolean; tooFast: boolean }
-  | { kind: 'inactive'; end: RunwayEnd };
+  | { kind: 'inactive'; end: RunwayEnd }
+  | { kind: 'closed'; end: RunwayEnd };
 
 export interface GameOptions {
   difficulty: Difficulty;
@@ -104,6 +126,8 @@ export interface GameOptions {
   routes?: Route[];
   /** Set false in tests to place traffic by hand. */
   autoSpawn?: boolean;
+  /** Random emergencies and runway closures. Defaults to `autoSpawn`. */
+  events?: boolean;
   windDir?: number;
 }
 
@@ -112,6 +136,24 @@ const SETTINGS: Record<Difficulty, { arrEvery: number; depEvery: number; fuel: [
   normal: { arrEvery: 27, depEvery: 33, fuel: [180, 300], alt: [6000, 10000] },
   busy: { arrEvery: 19, depEvery: 24, fuel: [150, 260], alt: [7000, 11000] },
 };
+
+/** Seconds between random events (emergencies, closures). */
+const EVENT_GAP: Record<Difficulty, [number, number]> = {
+  calm: [210, 320],
+  normal: [150, 230],
+  busy: [110, 180],
+};
+
+/** Seconds an emergency gives you to get the plane on the ground. */
+const EMERGENCY_TIME: Record<EmergencyKind, number> = { engine: 150, fuel: 110, medical: 130 };
+
+export const EMERGENCY_LABEL: Record<EmergencyKind, string> = {
+  engine: 'ENGINE FAILURE',
+  fuel: 'MINIMUM FUEL',
+  medical: 'MEDICAL EMERGENCY',
+};
+
+const CLOSURE_REASONS = ['BIRD STRIKE INSPECTION', 'DEBRIS ON RUNWAY', 'VEHICLE ON RUNWAY', 'DISABLED AIRCRAFT'];
 
 const AIRLINES = ['NVA', 'KST', 'BLU', 'ORA', 'SKY', 'PLR', 'TRN', 'ALP', 'MRD', 'VLX', 'HRW', 'CND'];
 const TYPES = ['A320', 'B738', 'A321', 'E190', 'B789', 'A359', 'CRJ9', 'AT76', 'A20N', 'B38M'];
@@ -126,7 +168,17 @@ export class Game {
   strips: DepStrip[] = [];
   routes: Route[];
   wind: WindState;
-  stats: Stats = { landed: 0, departed: 0, goArounds: 0, separationLosses: 0, diverted: 0, lost: 0 };
+  stats: Stats = {
+    landed: 0,
+    departed: 0,
+    goArounds: 0,
+    separationLosses: 0,
+    diverted: 0,
+    lost: 0,
+    emergencies: 0,
+    emergenciesHandled: 0,
+  };
+  closures: Closure[] = [];
   over: { reason: string; at: Vec } | null = null;
   messages: GameMessage[] = [];
   /** Bumped whenever routes change, so the UI knows to save them. */
@@ -136,6 +188,8 @@ export class Game {
   private nextArrAt: number;
   private nextDepAt: number;
   private readonly autoSpawn: boolean;
+  private readonly events: boolean;
+  private nextEventAt: number;
   private conflictPairs = new Set<string>();
   private predictTimer = 0;
   private usedCallsigns = new Set<string>();
@@ -146,6 +200,8 @@ export class Game {
     this.rng = new Rng(opts.seed ?? Math.floor(Math.random() * 2 ** 31));
     this.routes = (opts.routes ?? []).map((r) => ({ ...r, points: r.points.map((p) => ({ ...p })) }));
     this.autoSpawn = opts.autoSpawn ?? true;
+    this.events = opts.events ?? this.autoSpawn;
+    this.nextEventAt = this.rng.range(70, 110);
     const baseDir = opts.windDir ?? norm360((this.rng.chance(0.5) ? 270 : 90) + this.rng.range(-20, 20));
     this.wind = {
       dir: baseDir,
@@ -171,6 +227,24 @@ export class Game {
 
   activeEnds(): RunwayEnd[] {
     return Object.values(this.airport.ends).filter((e) => this.isActive(e.id));
+  }
+
+  isClosed(runwayId: string): boolean {
+    return this.closures.some((c) => c.runwayId === runwayId && c.started);
+  }
+
+  /** Into the wind and not closed: planes can land and take off here now. */
+  canUse(endId: string): boolean {
+    const end = this.airport.ends[endId];
+    return !!end && this.isActive(endId) && !this.isClosed(end.runwayId);
+  }
+
+  usableEnds(): RunwayEnd[] {
+    return this.activeEnds().filter((e) => this.canUse(e.id));
+  }
+
+  runwayName(runwayId: string): string {
+    return this.airport.runways.find((r) => r.id === runwayId)?.endIds.join('/') ?? runwayId;
   }
 
   /** Ends that will be active after the pending wind shift. */
@@ -205,6 +279,7 @@ export class Game {
       const end = Object.values(this.airport.ends).find((e) => inCone(e, last));
       if (end) {
         if (!this.isActive(end.id)) return { kind: 'inactive', end };
+        if (this.isClosed(end.runwayId)) return { kind: 'closed', end };
         const path = [ac.pos, ...points];
         return {
           kind: 'land',
@@ -218,7 +293,7 @@ export class Game {
   }
 
   canJoin(ac: Aircraft, r: Route): boolean {
-    if (r.kind === 'arr') return ac.kind === 'arr' && !!r.endId && this.isActive(r.endId);
+    if (r.kind === 'arr') return ac.kind === 'arr' && !!r.endId && this.canUse(r.endId);
     if (r.kind === 'dep') return ac.kind === 'dep';
     return true;
   }
@@ -284,6 +359,9 @@ export class Game {
       case 'inactive':
         this.say(`RWY ${plan.end.id} NOT IN USE — WIND FAVOURS ${this.activeEnds().map((e) => e.id).join('/')}`, 'warn');
         break;
+      case 'closed':
+        this.say(`RWY ${plan.end.id} IS CLOSED — USE ${this.usableEnds().map((e) => e.id).join('/') || 'ANOTHER RUNWAY'}`, 'warn');
+        break;
       case 'free':
         break;
     }
@@ -303,6 +381,7 @@ export class Game {
 
   joinRefusal(ac: Aircraft, route: Route): string {
     if (route.kind === 'arr' && ac.kind === 'dep') return `${route.name} IS AN ARRIVAL ROUTE`;
+    if (route.kind === 'arr' && route.endId && this.isActive(route.endId)) return `${route.name}: RWY ${route.endId} IS CLOSED`;
     if (route.kind === 'arr') return `${route.name}: RWY ${route.endId} NOT IN USE`;
     if (route.kind === 'dep') return `${route.name} IS A DEPARTURE ROUTE`;
     return `CAN'T JOIN ${route.name}`;
@@ -314,6 +393,10 @@ export class Game {
 
   changeAltitude(ac: Aircraft, steps: number): void {
     if (!this.canControl(ac)) return;
+    if (ac.emergency?.kind === 'engine' && steps > 0) {
+      this.say(`${ac.callsign} CAN'T CLIMB — ENGINE FAILURE`, 'warn');
+      return;
+    }
     const [lo, hi] = ac.kind === 'arr' ? ARR_ALT : DEP_ALT;
     ac.targetAlt = clamp(Math.round(ac.targetAlt / ALT_STEP) * ALT_STEP + steps * ALT_STEP, lo, hi);
   }
@@ -321,7 +404,8 @@ export class Game {
   changeSpeed(ac: Aircraft, steps: number): void {
     if (!this.canControl(ac)) return;
     const [lo, hi] = ac.kind === 'arr' ? ARR_SPD : DEP_SPD;
-    ac.targetSpeed = clamp(Math.round(ac.targetSpeed / SPD_STEP) * SPD_STEP + steps * SPD_STEP, lo, hi);
+    const max = ac.emergency?.kind === 'engine' ? ENGINE_OUT_MAX_SPEED : hi;
+    ac.targetSpeed = clamp(Math.round(ac.targetSpeed / SPD_STEP) * SPD_STEP + steps * SPD_STEP, lo, max);
   }
 
   toggleHold(ac: Aircraft): void {
@@ -341,6 +425,10 @@ export class Game {
     if (!strip || !end || this.over) return false;
     if (!this.isActive(endId)) {
       this.say(`RWY ${endId} NOT IN USE`, 'warn');
+      return false;
+    }
+    if (this.isClosed(end.runwayId)) {
+      this.say(`RWY ${endId} IS CLOSED`, 'warn');
       return false;
     }
     if (this.runwayBusy(end.runwayId, true)) {
@@ -406,6 +494,8 @@ export class Game {
     if (this.over) return;
     this.time += dt;
     this.updateWind();
+    this.updateClosures();
+    if (this.events) this.updateEvents();
     if (this.autoSpawn) this.spawn();
 
     const ctx = this.ctx;
@@ -432,6 +522,13 @@ export class Game {
   private processEvents(dt: number): void {
     const remove = new Set<Aircraft>();
     for (const ac of this.aircraft) {
+      // Planes already on final get to finish their landing.
+      if (ac.emergency && ac.phase === 'enroute' && this.time >= ac.emergency.deadline) {
+        remove.add(ac);
+        this.addScore(SCORE.emergencyFailed);
+        this.say(`${ac.callsign} MAYDAY NOT HANDLED — DIVERTED ${SCORE.emergencyFailed}`, 'bad');
+        continue;
+      }
       if (ac.kind === 'arr' && isAirborne(ac)) {
         ac.fuel -= dt;
         if (!ac.lowFuelWarned && ac.fuel <= LOW_FUEL) {
@@ -472,8 +569,15 @@ export class Game {
         remove.add(ac);
         this.stats.landed++;
         const fuelBonus = ac.fuel < LOW_FUEL ? 40 : 0;
-        this.addScore(SCORE.landing + fuelBonus);
-        this.say(`${ac.callsign} LANDED +${SCORE.landing + fuelBonus}`, 'good');
+        if (ac.emergency) {
+          this.stats.emergenciesHandled++;
+          const pts = SCORE.landing + SCORE.emergencyLanded;
+          this.addScore(pts);
+          this.say(`${ac.callsign} MAYDAY LANDED SAFELY +${pts}`, 'good');
+        } else {
+          this.addScore(SCORE.landing + fuelBonus);
+          this.say(`${ac.callsign} LANDED +${SCORE.landing + fuelBonus}`, 'good');
+        }
       }
 
       this.checkBoundary(ac, remove);
@@ -515,8 +619,9 @@ export class Game {
     ac.path = [];
     ac.pathEnd = NO_PATH_END;
     ac.routeId = null;
-    ac.targetAlt = Math.max(4000, Math.round(ac.alt / ALT_STEP) * ALT_STEP);
-    ac.targetSpeed = 210;
+    const engineOut = ac.emergency?.kind === 'engine';
+    ac.targetAlt = engineOut ? Math.round(ac.alt / ALT_STEP) * ALT_STEP : Math.max(4000, Math.round(ac.alt / ALT_STEP) * ALT_STEP);
+    ac.targetSpeed = engineOut ? ENGINE_OUT_MAX_SPEED : 210;
     this.stats.goArounds++;
     this.addScore(SCORE.goAround);
     this.say(`${ac.callsign} GOING AROUND — ${why} ${SCORE.goAround}`, 'warn');
@@ -602,10 +707,20 @@ export class Game {
 
   /** After a wind shift: cancel approaches to runway ends that are no longer in use. */
   private onRunwayChange(): void {
+    const cancelled = this.cancelUnusableApproaches();
+    const ids = this.usableEnds().map((e) => e.id).join('/');
+    this.say(`WIND SHIFT — NOW USING RWY ${ids}${cancelled ? ` · ${cancelled} APPROACH${cancelled > 1 ? 'ES' : ''} CANCELLED` : ''}`, 'warn');
+  }
+
+  /**
+   * Cancels landing clearances for runway ends that can't be used any more.
+   * Planes already on short final are left to land. Returns how many were cancelled.
+   */
+  private cancelUnusableApproaches(): number {
     let cancelled = 0;
     for (const ac of this.aircraft) {
       const target = ac.landingEnd ?? (ac.pathEnd.type === 'land' ? ac.pathEnd.endId : null);
-      if (!target || this.isActive(target)) continue;
+      if (!target || this.canUse(target)) continue;
       if (ac.phase === 'final' && approachCoords(this.airport.ends[target], ac.pos).along < 150) continue;
       ac.phase = 'enroute';
       ac.landingEnd = null;
@@ -616,14 +731,113 @@ export class Game {
       if (ac.pathEnd.type !== 'route') continue;
       const routeId = ac.pathEnd.routeId;
       const route = this.routes.find((r) => r.id === routeId);
-      if (route?.kind === 'arr' && route.endId && !this.isActive(route.endId)) {
+      if (route?.kind === 'arr' && route.endId && !this.canUse(route.endId)) {
         ac.pathEnd = NO_PATH_END;
         ac.landingEnd = null;
         cancelled++;
       }
     }
-    const ids = this.activeEnds().map((e) => e.id).join('/');
-    this.say(`WIND SHIFT — NOW USING RWY ${ids}${cancelled ? ` · ${cancelled} APPROACH${cancelled > 1 ? 'ES' : ''} CANCELLED` : ''}`, 'warn');
+    return cancelled;
+  }
+
+  // ---------------------------------------------------------------- events
+
+  private updateEvents(): void {
+    if (this.time < this.nextEventAt) return;
+    const [lo, hi] = EVENT_GAP[this.difficulty];
+    const started = this.rng.chance(0.6) ? this.startMayday() || this.startClosure() : this.startClosure() || this.startMayday();
+    this.nextEventAt = this.time + (started ? this.rng.range(lo, hi) : 20);
+  }
+
+  /** Declares an emergency on an arrival (a new one if none is suitable). */
+  startMayday(kind?: EmergencyKind): Aircraft | null {
+    const maxAtOnce = this.difficulty === 'busy' ? 2 : 1;
+    if (this.aircraft.filter((a) => a.emergency).length >= maxAtOnce) return null;
+    const candidates = this.aircraft.filter((a) => a.kind === 'arr' && a.phase === 'enroute' && !a.entering && !a.emergency);
+    let ac: Aircraft | null = candidates.length ? this.rng.pick(candidates) : null;
+    if (!ac) {
+      const spot = this.findArrivalSpawn();
+      if (!spot) return null;
+      ac = this.spawnArrivalAt(spot.pos, spot.heading, spot.alt);
+    }
+    this.declareEmergency(ac, kind ?? this.rng.pick(['engine', 'fuel', 'medical'] as const));
+    return ac;
+  }
+
+  declareEmergency(ac: Aircraft, kind: EmergencyKind): void {
+    const time = EMERGENCY_TIME[kind] * (this.difficulty === 'calm' ? 1.3 : 1);
+    ac.emergency = { kind, deadline: this.time + time };
+    this.stats.emergencies++;
+    if (kind === 'fuel') ac.fuel = Math.min(ac.fuel, time + 5);
+    if (kind === 'engine') {
+      ac.targetSpeed = Math.min(ac.targetSpeed, ENGINE_OUT_MAX_SPEED);
+      ac.targetAlt = Math.min(ac.targetAlt, Math.max(ARR_ALT[0], Math.round(ac.alt / ALT_STEP) * ALT_STEP));
+    }
+    this.say(`MAYDAY ${ac.callsign} — ${EMERGENCY_LABEL[kind]} — LAND IT FIRST`, 'bad');
+  }
+
+  /** Schedules a closure of one runway, if one can be closed safely now. */
+  startClosure(runwayId?: string, warning = CLOSURE_WARNING): Closure | null {
+    if (this.closures.length > 0) return null;
+    const duration = this.rng.range(CLOSURE_DURATION[0], CLOSURE_DURATION[1]);
+    // Don't overlap a wind shift: the open runway must stay usable throughout.
+    const windSoon = !!this.wind.pending || this.wind.nextShiftAt - WIND_WARNING - this.time < warning + duration + 10;
+    if (!runwayId && windSoon) return null;
+    const id = runwayId ?? this.rng.pick(this.airport.runways).id;
+    const closure: Closure = {
+      runwayId: id,
+      reason: this.rng.pick(CLOSURE_REASONS),
+      startsAt: this.time + warning,
+      endsAt: this.time + warning + duration,
+      started: false,
+    };
+    this.closures.push(closure);
+    this.say(`RWY ${this.runwayName(id)} CLOSING IN ${Math.round(warning)}s — ${closure.reason}`, 'warn');
+    return closure;
+  }
+
+  private updateClosures(): void {
+    for (const c of this.closures) {
+      if (!c.started && this.time >= c.startsAt) {
+        c.started = true;
+        const cancelled = this.cancelUnusableApproaches();
+        this.say(
+          `RWY ${this.runwayName(c.runwayId)} CLOSED${cancelled ? ` · ${cancelled} APPROACH${cancelled > 1 ? 'ES' : ''} CANCELLED` : ''}`,
+          'bad',
+        );
+      }
+    }
+    const ended = this.closures.filter((c) => this.time >= c.endsAt);
+    if (ended.length) {
+      this.closures = this.closures.filter((c) => this.time < c.endsAt);
+      for (const c of ended) this.say(`RWY ${this.runwayName(c.runwayId)} OPEN AGAIN`, 'warn');
+    }
+  }
+
+  /** What the banner should show: wind shifts, runway closures, emergencies. */
+  notices(): Notice[] {
+    const out: Notice[] = [];
+    const t = (sec: number): string => {
+      const s = Math.max(0, Math.ceil(sec));
+      return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    };
+    for (const ac of this.aircraft) {
+      if (ac.emergency && ac.phase !== 'rollout') {
+        out.push({ text: `MAYDAY ${ac.callsign} · ${EMERGENCY_LABEL[ac.emergency.kind]} · LAND WITHIN ${t(ac.emergency.deadline - this.time)}`, tone: 'bad' });
+      }
+    }
+    for (const c of this.closures) {
+      out.push(
+        c.started
+          ? { text: `RWY ${this.runwayName(c.runwayId)} CLOSED · OPENS IN ${t(c.endsAt - this.time)} · ${c.reason}`, tone: 'bad' }
+          : { text: `RWY ${this.runwayName(c.runwayId)} CLOSES IN ${t(c.startsAt - this.time)} · ${c.reason}`, tone: 'warn' },
+      );
+    }
+    if (this.wind.pending) {
+      const ids = this.upcomingEnds().map((e) => e.id).join(' ');
+      out.push({ text: `WIND SHIFT IN ${t(this.wind.pending.at - this.time)} · RUNWAYS → ${ids}`, tone: 'warn' });
+    }
+    return out;
   }
 
   // ----------------------------------------------------------------- spawn
@@ -754,6 +968,7 @@ export class Game {
       predicted: false,
       lowFuelWarned: false,
       waited: 0,
+      emergency: null,
     };
   }
 

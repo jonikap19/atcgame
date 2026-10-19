@@ -23,6 +23,14 @@ It's inspired by casual radar ATC games, with the things I wanted in them:
 - **Fair arrivals.** New arrivals appear at a random spot on the edge, well
   away from the exit gates, and at a level where nothing will come near them
   in their first 20 seconds.
+- **Emergencies.** Now and then an arrival declares a MAYDAY (engine
+  failure, minimum fuel or a medical emergency) with a countdown to land it.
+  Landing it in time is worth a big bonus. An engine failure also means no
+  climbing and at most 200 kt.
+- **Runway closures.** After a 25-second warning a runway can close for a
+  minute or two (bird strike inspection, debris...). Approaches to it are
+  cancelled and takeoffs from it are blocked. Only one runway ever closes at
+  a time, and never around a wind shift.
 - **Conflict prediction.** A dashed amber ring means two planes will lose
   separation within about 20 seconds. A red ring means they already have.
 
@@ -58,6 +66,6 @@ the radar renderer (`src/render`), and the UI and input layer (`src/ui`).
 
 1. ~~Playable prototype~~: one airport, arrivals and departures, altitude and
    speed, routes for everything, wind shifts, collisions and scoring.
-2. Emergencies and events: Mayday, runway closures, storm cells, a plane
-   that stops responding, medical diversions, traffic rushes.
+2. Emergencies and events: ~~Mayday~~, ~~runway closures~~, storm cells,
+   a plane that stops responding, medical returns for departures, traffic rushes.
 3. More airports, sound, polish.

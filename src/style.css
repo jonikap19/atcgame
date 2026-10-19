@@ -12,6 +12,7 @@
   --accent: #9ff0c8;
   --warn: #ffaa33;
   --alert: #ff4f5e;
+  --mayday: #ff6fae;
   --font-display: 'Chakra Petch', 'Bahnschrift', 'Arial Narrow', system-ui, sans-serif;
   --font-data: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
   --safe-top: env(safe-area-inset-top, 0px);
@@ -191,6 +192,10 @@ summary:focus-visible {
   left: 50%;
   transform: translateX(-50%);
   top: var(--overlay-top, var(--hud-top, 60px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
   background: var(--panel);
   border: 1px solid var(--warn);
   color: var(--warn);
@@ -538,6 +543,9 @@ summary:focus-visible {
 .c-dep {
   color: var(--dep);
 }
+.c-may {
+  color: var(--mayday);
+}
 .final-score {
   margin: 0;
   font-family: var(--font-display);
@@ -657,4 +665,35 @@ summary:focus-visible {
 }
 .sel-limits .over {
   color: var(--warn);
+}
+
+#banner .bad {
+  color: var(--mayday);
+}
+#banner:has(.bad) {
+  border-color: var(--mayday);
+}
+#banner > div {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sel-alert {
+  color: var(--mayday);
+  border: 1px solid var(--mayday);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  animation: alert-pulse 1.2s ease-in-out infinite;
+}
+@keyframes alert-pulse {
+  50% {
+    border-color: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sel-alert {
+    animation: none;
+  }
 }

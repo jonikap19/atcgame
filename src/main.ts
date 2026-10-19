@@ -163,7 +163,7 @@ class App {
     // spot below the top bar where they don't overlap an exit at the top or bottom.
     const half = Math.min(280, (w - 96) / 2);
     const inSpan = gates.filter((r) => r.x1 > w / 2 - half && r.x0 < w / 2 + half);
-    const band = 32 + 6 + 3 * 27;
+    const band = 3 * 22 + 18 + 3 * 27; // up to three banner lines and three messages
     const base = top + 6;
     const candidates = [base, ...inSpan.map((r) => r.y1 + 6)].filter((y) => y >= base).sort((p, q) => p - q);
     const overlayTop = candidates.find((y) => inSpan.every((r) => r.y1 <= y || r.y0 >= y + band)) ?? base;
@@ -229,9 +229,9 @@ class App {
       ['TIME', fmtTime(game.time)],
       ['LANDED', s.landed],
       ['DEPARTED', s.departed],
+      ['MAYDAYS LANDED', `${s.emergenciesHandled} / ${s.emergencies}`],
       ['GO-AROUNDS', s.goArounds],
       ['SEPARATION LOST', s.separationLosses],
-      ['DIVERTED / LOST', s.diverted + s.lost],
     ];
     $('over-stats').innerHTML = rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
     // Give the player a moment to see the collision before the card covers it.

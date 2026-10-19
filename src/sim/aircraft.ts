@@ -33,6 +33,14 @@ export type PathEnd =
 
 export const NO_PATH_END: PathEnd = { type: 'none' };
 
+export type EmergencyKind = 'engine' | 'fuel' | 'medical';
+
+/** A declared emergency: the plane must be on the ground by `deadline` (game time). */
+export interface Emergency {
+  kind: EmergencyKind;
+  deadline: number;
+}
+
 export interface Aircraft {
   id: number;
   callsign: string;
@@ -66,6 +74,7 @@ export interface Aircraft {
   lowFuelWarned: boolean;
   /** Seconds the departure waited at the holding point before takeoff. */
   waited: number;
+  emergency: Emergency | null;
 }
 
 export interface FlightContext {

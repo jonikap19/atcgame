@@ -47,6 +47,8 @@ export class Renderer {
   /** Screen rectangles of data blocks, used for hit testing. */
   labelRects = new Map<number, Rect>();
   private labelSlot = new Map<number, number>();
+  /** Seconds, for animations. */
+  private now = 0;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -99,6 +101,7 @@ export class Renderer {
   }
 
   draw(game: Game, ui: UiState, realTime: number): void {
+    this.now = realTime;
     const ctx = this.ctx;
     ctx.fillStyle = C.bg;
     ctx.fillRect(0, 0, this.width, this.height);
@@ -188,10 +191,40 @@ export class Renderer {
     this.text(label, p, C.cone, 10, 'center', 600);
   }
 
+  /** Red crosses over a closed runway (blinking amber while the closure is pending). */
+  private drawClosure(from: Vec, to: Vec, closed: boolean, secondsLeft: number, realTime: number): void {
+    const ctx = this.ctx;
+    const a = this.S(from);
+    const b = this.S(to);
+    const color = closed ? C.alert : C.warn;
+    if (!closed && Math.sin(realTime * 6) < 0) return;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    const size = Math.max(5, 9 * this.view.scale);
+    for (const t of [0.2, 0.5, 0.8]) {
+      const x = a.x + (b.x - a.x) * t;
+      const y = a.y + (b.y - a.y) * t;
+      ctx.beginPath();
+      ctx.moveTo(x - size, y - size);
+      ctx.lineTo(x + size, y + size);
+      ctx.moveTo(x + size, y - size);
+      ctx.lineTo(x - size, y + size);
+      ctx.stroke();
+    }
+    const s = Math.max(0, Math.ceil(secondsLeft));
+    const label = `${closed ? 'CLOSED' : 'CLOSING'} ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 14 };
+    ctx.font = `600 10px ${MONO}`;
+    const w = ctx.measureText(label).width + 8;
+    ctx.fillStyle = 'rgba(10, 20, 27, 0.85)';
+    ctx.fillRect(mid.x - w / 2, mid.y - 7, w, 14);
+    this.text(label, mid, color, 10, 'center', 600);
+  }
+
   private drawRunways(game: Game, realTime: number): void {
     const ctx = this.ctx;
     const upcoming = new Set(game.upcomingEnds().map((e) => e.id));
-    for (const end of game.activeEnds()) {
+    for (const end of game.usableEnds()) {
       if (upcoming.size && !upcoming.has(end.id)) {
         // Fading out: this direction is about to stop being used.
         this.drawCone(end, 'rgba(160,225,205,0.35)', C.coneFill, [5, 5]);
@@ -224,9 +257,11 @@ export class Renderer {
         ctx.lineWidth = Math.max(1, 2 * this.view.scale);
         ctx.stroke();
       }
+      const closure = game.closures.find((c) => c.runwayId === rw.id);
+      if (closure) this.drawClosure(rw.a, rw.b, closure.started, closure.started ? closure.endsAt - game.time : closure.startsAt - game.time, realTime);
     }
     for (const end of Object.values(game.airport.ends)) {
-      const active = game.isActive(end.id);
+      const active = game.canUse(end.id);
       const back = headingVec(end.heading + 180);
       const p = this.S(vec(end.threshold.x + back.x * 20, end.threshold.y + back.y * 20));
       this.text(end.id, p, active ? C.runway : C.runwayIdle, 10, 'center', active ? 600 : 400);
@@ -276,6 +311,7 @@ export class Renderer {
 
   private colorOf(ac: Aircraft, ui: UiState): string {
     if (ac.conflict) return C.alert;
+    if (ac.emergency) return C.mayday;
     if (ac.kind === 'arr' && ac.fuel < LOW_FUEL) return C.warn;
     if (ac.id === ui.selectedId) return C.sel;
     return ac.kind === 'arr' ? C.arr : C.dep;
@@ -316,6 +352,16 @@ export class Renderer {
     const ang = Math.atan2(tip.y - p.y, tip.x - p.x);
     const size = ac.phase === 'rollout' || (ac.phase === 'takeoff' && ac.alt <= 0) ? 5 : 7;
 
+    if (ac.emergency) {
+      const pulse = 0.5 + 0.5 * Math.sin(this.now * 5);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 15 + pulse * 6, 0, Math.PI * 2);
+      ctx.strokeStyle = C.mayday;
+      ctx.globalAlpha = 0.4 + 0.5 * (1 - pulse);
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
     if (ac.conflict || ac.predicted) {
       ctx.beginPath();
       ctx.arc(p.x, p.y, Math.max(12, (SEP_H / 2) * this.view.scale), 0, Math.PI * 2);
@@ -385,7 +431,8 @@ export class Renderer {
     const route = routeId ? game.routes.find((r) => r.id === routeId) : null;
     if (route) tags.push(route.name);
     if (ac.hold || ac.pathEnd.type === 'hold') tags.push('HOLD');
-    if (ac.kind === 'arr' && ac.fuel < LOW_FUEL) tags.push(`FUEL ${fmtTime(ac.fuel)}`);
+    if (ac.emergency) tags.unshift(`MAYDAY ${fmtTime(ac.emergency.deadline - game.time)}`);
+    else if (ac.kind === 'arr' && ac.fuel < LOW_FUEL) tags.push(`FUEL ${fmtTime(ac.fuel)}`);
     return [ac.callsign, `${altPart} ${spdPart}`, tags.join(' ')].filter(Boolean);
   }
 
@@ -487,7 +534,9 @@ export class Renderer {
           ? [plan.route.color, `JOIN ${plan.route.name}`]
           : plan.kind === 'inactive'
             ? [C.alert, `RWY ${plan.end.id} NOT IN USE`]
-            : [C.sel, ''];
+            : plan.kind === 'closed'
+              ? [C.alert, `RWY ${plan.end.id} IS CLOSED`]
+              : [C.sel, ''];
     // Show the whole stroke faintly, and the part the plane will fly brightly.
     this.ctx.globalAlpha = 0.3;
     this.line(s.points, color, 1.5);

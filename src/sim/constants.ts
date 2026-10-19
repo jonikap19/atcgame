@@ -61,7 +61,16 @@ export const MAX_STRIPS = 4;
 /** Seconds of warning before the wind shifts and runways swap direction. */
 export const WIND_WARNING = 45;
 
+/** Fastest a plane with a failed engine can fly. */
+export const ENGINE_OUT_MAX_SPEED = 200;
+
+/** Warning before a runway closes, and how long closures last. */
+export const CLOSURE_WARNING = 25;
+export const CLOSURE_DURATION: [number, number] = [60, 110];
+
 export const SCORE = {
+  emergencyLanded: 150,
+  emergencyFailed: -150,
   landing: 100,
   exitGood: 80,
   exitLow: 40,

@@ -13,6 +13,7 @@ export const C = {
   sel: '#ffffff',
   warn: '#ffaa33',
   alert: '#ff4f5e',
+  mayday: '#ff6fae',
   good: '#7ef0a0',
   text: '#b8cbd3',
   dim: '#6f8794',
