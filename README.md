@@ -28,7 +28,7 @@ It's inspired by casual radar ATC games, with the things I wanted in them:
 | Select a plane | Tap it or its label | Tab / Shift+Tab |
 | Altitude ±1000 ft | Panel buttons, or mouse wheel over a plane | ↑ ↓ or W S |
 | Speed ±10 kt | Panel buttons | → ← or D A |
-| Hold (circle) | HOLD HERE button | H |
+| Hold (circle) | Draw a circle at the end of a path, or HOLD HERE | H |
 | Join a saved route | Drag the plane onto the route's start ring | |
 | Launch a departure | ▲ runway button on its strip | |
 | Plan routes | PLAN ROUTES | P |

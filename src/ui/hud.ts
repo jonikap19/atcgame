@@ -261,7 +261,8 @@ export class Hud {
     if (ac.phase === 'takeoff') status = `TAKING OFF RWY ${ac.runwayEnd ?? ''}`;
     else if (ac.phase === 'rollout') status = 'LANDED · ROLLING OUT';
     else if (ac.phase === 'final') status = `<span class="ok">ON FINAL RWY ${landing}</span>`;
-    else if (ac.holding) status = 'HOLDING';
+    else if (ac.hold) status = `HOLDING ${ac.hold.dir > 0 ? 'CLOCKWISE' : 'ANTICLOCKWISE'}`;
+    else if (ac.pathEnd.type === 'hold') status = 'FLYING TO HOLD';
     else if (landing) status = `<span class="ok">CLEARED TO LAND ${landing}</span>`;
     else if (route) status = `FLYING ROUTE <span style="color:${route.color}">${route.name}</span>`;
     else if (ac.path.length) status = 'FOLLOWING YOUR PATH';
@@ -279,8 +280,8 @@ export class Hud {
     this.set('sel-alt', sel.alt, `${alt3(ac.alt)}${altTarget}`);
     this.set('sel-spd', sel.spd, `${Math.round(ac.speed)}${spdTarget}`);
     for (const b of sel.buttons) b.disabled = !can;
-    sel.hold.classList.toggle('on', ac.holding);
-    this.set('sel-hold', sel.hold, ac.holding ? 'LEAVE HOLD' : 'HOLD HERE');
+    sel.hold.classList.toggle('on', !!ac.hold);
+    this.set('sel-hold', sel.hold, ac.hold ? 'LEAVE HOLD' : 'HOLD HERE');
     const showFuel = ac.kind === 'arr' && Number.isFinite(ac.fuel);
     sel.fuel.hidden = !showFuel;
     if (showFuel) {

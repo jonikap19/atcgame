@@ -7,7 +7,6 @@ import {
   FINAL_DESCENT_RATE,
   FINAL_SPEED,
   GLIDE_ENTRY_ALT,
-  HOLD_TURN_RATE,
   KT_TO_UPS,
   ROLLOUT_DECEL,
   ROTATE_SPEED,
@@ -15,17 +14,22 @@ import {
   TURN_RATE,
   WP_RADIUS,
 } from './constants';
+import { type Vec, add, angleDiff, clamp, dist, headingTo, headingVec, mul, norm360, sub } from './geom';
+import { type Hold, turnRadius } from './pathfit';
+import type { Route } from './routes';
 
 /** How far ahead along its path a plane aims. */
 const LOOKAHEAD = 40;
-import { type Vec, angleDiff, clamp, dist, headingTo, headingVec, norm360, sub, mul } from './geom';
-import type { Route } from './routes';
 
 export type Kind = 'arr' | 'dep';
 export type Phase = 'takeoff' | 'enroute' | 'final' | 'rollout';
 
 /** What a plane does when it reaches the end of its current path. */
-export type PathEnd = { type: 'none' } | { type: 'land'; endId: string } | { type: 'route'; routeId: string };
+export type PathEnd =
+  | { type: 'none' }
+  | { type: 'land'; endId: string }
+  | { type: 'route'; routeId: string }
+  | { type: 'hold'; hold: Hold };
 
 export const NO_PATH_END: PathEnd = { type: 'none' };
 
@@ -45,7 +49,8 @@ export interface Aircraft {
   pathEnd: PathEnd;
   /** Route the plane is currently flying, for display. */
   routeId: string | null;
-  holding: boolean;
+  /** The circle the plane is orbiting, if it is holding. */
+  hold: Hold | null;
   /** Runway end the plane is cleared to land on. */
   landingEnd: string | null;
   /** Runway end the plane is taking off from or rolling out on. */
@@ -100,9 +105,27 @@ function approach(current: number, target: number, up: number, down: number, dt:
   return Math.max(target, current - down * dt);
 }
 
+/** A hold that starts circling from where the plane is now, turning right. */
+export function holdHere(ac: Aircraft): Hold {
+  const radius = turnRadius(ac.speed) * 1.15;
+  const v = headingVec(ac.heading);
+  const right = { x: -v.y, y: v.x };
+  return { center: add(ac.pos, mul(right, radius)), radius, dir: 1 };
+}
+
+/** Steers round a hold circle: along the tangent, corrected back towards the circle. */
+function flyHold(ac: Aircraft, hold: Hold, dt: number): void {
+  const d = dist(ac.pos, hold.center);
+  const outward = headingTo(hold.center, ac.pos);
+  const tangent = outward + 90 * hold.dir;
+  const error = (d - hold.radius) / hold.radius;
+  const correction = clamp(error * 70, -70, 70) * hold.dir;
+  steer(ac, norm360(tangent + correction), TURN_RATE, dt);
+}
+
 function flyEnroute(ac: Aircraft, dt: number, ctx: FlightContext): void {
-  if (ac.holding) {
-    ac.heading = norm360(ac.heading + HOLD_TURN_RATE * dt);
+  if (ac.hold && ac.path.length === 0) {
+    flyHold(ac, ac.hold, dt);
   } else {
     // Progress along the path: skip to the nearest of the next few points...
     let nearest = 0;
@@ -132,6 +155,9 @@ function flyEnroute(ac: Aircraft, dt: number, ctx: FlightContext): void {
       const route = ctx.routes.find((r) => r.id === routeId);
       if (route) applyRoute(ac, route);
       else ac.pathEnd = NO_PATH_END;
+    } else if (ac.pathEnd.type === 'hold') {
+      ac.hold = ac.pathEnd.hold;
+      ac.pathEnd = NO_PATH_END;
     } else if (ac.pathEnd.type === 'land') {
       ac.phase = 'final';
       ac.landingEnd = ac.pathEnd.endId;

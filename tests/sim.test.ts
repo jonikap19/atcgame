@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { approachCoords, gateAt, inCone, makeAirport } from '../src/sim/airport';
 import { WORLD_H, WORLD_W } from '../src/sim/constants';
 import { Game } from '../src/sim/game';
-import { angleDiff, headingTo, vec } from '../src/sim/geom';
+import { angleDiff, dist, headingTo, vec } from '../src/sim/geom';
+import { detectEndLoop, turnRadius } from '../src/sim/pathfit';
 import { classifyRoute } from '../src/sim/routes';
 
 function run(game: Game, seconds: number, dt = 1 / 30): void {
@@ -162,6 +163,78 @@ describe('drawn paths', () => {
     g.commandPath(ac, stroke);
     // The loop's far side (x ≈ 320, y ≈ 450) is still part of the path.
     expect(ac.path.some((p) => p.x < 360 && p.y > 420)).toBe(true);
+  });
+});
+
+describe('holding', () => {
+  // A circle of radius r around c, starting at its west point, drawn clockwise (or not).
+  function circle(c: { x: number; y: number }, r: number, clockwise: boolean, turns = 1.1): { x: number; y: number }[] {
+    const pts = [];
+    for (let a = 0; a <= 360 * turns; a += 10) {
+      const h = 270 + (clockwise ? a : -a);
+      pts.push(vec(c.x + Math.sin((h * Math.PI) / 180) * r, c.y - Math.cos((h * Math.PI) / 180) * r));
+    }
+    return pts;
+  }
+
+  it('recognises a circle at the end of a line', () => {
+    const line = [vec(200, 300), vec(300, 300), vec(400, 300)];
+    expect(detectEndLoop(line)).toBeNull();
+    const loop = detectEndLoop([...line, ...circle(vec(520, 300), 120, true)]);
+    expect(loop?.hold.dir).toBe(1);
+    expect(dist(loop!.hold.center, vec(520, 300))).toBeLessThan(25);
+    expect(loop!.hold.radius).toBeGreaterThan(90);
+    expect(loop!.hold.radius).toBeLessThan(140);
+    expect(detectEndLoop([...line, ...circle(vec(520, 300), 120, false)])?.hold.dir).toBe(-1);
+  });
+
+  it('does not mistake a gentle curve for a circle', () => {
+    const arc = circle(vec(500, 500), 200, true, 0.5);
+    expect(detectEndLoop(arc)).toBeNull();
+  });
+
+  it('flies the line, then holds on the circle drawn at its end', () => {
+    const g = quietGame(270);
+    const ac = g.spawnArrivalAt(vec(200, 300), 90, 6000, 500);
+    const plan = g.commandPath(ac, [vec(200, 300), vec(300, 300), vec(400, 300), ...circle(vec(520, 300), 120, true)]);
+    expect(plan?.kind).toBe('hold');
+    run(g, 20);
+    expect(ac.hold).not.toBeNull();
+    // It keeps circling the drawn centre for a long time.
+    for (let i = 0; i < 12; i++) {
+      run(g, 5);
+      const d = dist(ac.pos, vec(520, 300));
+      expect(d).toBeGreaterThan(60);
+      expect(d).toBeLessThan(180);
+    }
+  });
+
+  it('circles the way the loop was drawn', () => {
+    const g = quietGame(270);
+    const ac = g.spawnArrivalAt(vec(200, 300), 90, 6000, 500);
+    g.commandPath(ac, [vec(200, 300), vec(400, 300), ...circle(vec(520, 300), 120, false)]);
+    run(g, 25);
+    const before = ac.heading;
+    run(g, 2);
+    expect(angleDiff(before, ac.heading)).toBeLessThan(0);
+  });
+
+  it('widens a circle smaller than the plane can turn', () => {
+    const g = quietGame(270);
+    const ac = g.spawnArrivalAt(vec(200, 300), 90, 6000, 500);
+    const plan = g.commandPath(ac, [vec(200, 300), vec(300, 300), ...circle(vec(330, 300), 30, true, 1.2)]);
+    expect(plan?.kind).toBe('hold');
+    expect(plan?.kind === 'hold' && plan.hold.radius).toBeGreaterThanOrEqual(turnRadius(250));
+  });
+
+  it('a new path takes the plane out of the hold', () => {
+    const g = quietGame(270);
+    const ac = g.spawnArrivalAt(vec(400, 300), 90, 6000, 500);
+    g.toggleHold(ac);
+    run(g, 10);
+    expect(ac.hold).not.toBeNull();
+    g.commandPath(ac, [ac.pos, vec(ac.pos.x + 200, ac.pos.y + 200), vec(900, 700)]);
+    expect(ac.hold).toBeNull();
   });
 });
 

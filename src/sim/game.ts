@@ -4,6 +4,7 @@ import {
   NO_PATH_END,
   clearForApproach,
   cloneForPrediction,
+  holdHere,
   isAirborne,
   stepFlight,
 } from './aircraft';
@@ -46,7 +47,7 @@ import {
 } from './constants';
 import { type Vec, angleDiff, clamp, dist, headingTo, norm360, pathLength, vec } from './geom';
 import { Rng } from './rng';
-import { fitTrack } from './pathfit';
+import { type Hold, detectEndLoop, fitTrack, turnRadius } from './pathfit';
 import { ROUTE_COLORS, type Route, classifyRoute, simplify } from './routes';
 
 export type Difficulty = 'calm' | 'normal' | 'busy';
@@ -89,6 +90,7 @@ export interface Stats {
 export type PathPlan =
   | { kind: 'free' }
   | { kind: 'join'; route: Route }
+  | { kind: 'hold'; hold: Hold }
   | { kind: 'land'; end: RunwayEnd; tooHigh: boolean }
   | { kind: 'inactive'; end: RunwayEnd };
 
@@ -221,23 +223,40 @@ export class Game {
     return ac.alt - DESCENT_RATE * seconds <= allowed;
   }
 
-  /** The smoothed path a plane will fly for a line drawn from it. */
-  pathFromStroke(ac: Aircraft, rawPoints: Vec[]): Vec[] {
-    return fitTrack(ac.pos, ac.heading, ac.speed, rawPoints);
+  /**
+   * What a line drawn from a plane means: the smoothed path it will fly, and
+   * what happens at the end of it (land, join a route, hold where it ends in a circle...).
+   */
+  strokePlan(ac: Aircraft, rawPoints: Vec[]): { path: Vec[]; plan: PathPlan } | null {
+    const loop = detectEndLoop(rawPoints);
+    if (loop) {
+      // Never ask for a tighter circle than the plane can fly.
+      const radius = Math.max(loop.hold.radius, turnRadius(ac.speed) * 1.05);
+      const hold: Hold = { ...loop.hold, radius };
+      const path = loop.lead.length > 1 ? fitTrack(ac.pos, ac.heading, ac.speed, loop.lead) : [];
+      return { path, plan: { kind: 'hold', hold } };
+    }
+    const path = fitTrack(ac.pos, ac.heading, ac.speed, rawPoints);
+    if (path.length === 0) return null;
+    return { path, plan: this.planPath(ac, path) };
   }
 
   commandPath(ac: Aircraft, rawPoints: Vec[]): PathPlan | null {
     if (ac.phase !== 'enroute' && ac.phase !== 'final') return null;
-    const points = this.pathFromStroke(ac, rawPoints);
-    if (points.length === 0) return null;
-    const plan = this.planPath(ac, points);
+    const result = this.strokePlan(ac, rawPoints);
+    if (!result) return null;
+    const { path, plan } = result;
     ac.phase = 'enroute';
-    ac.holding = false;
+    ac.hold = null;
     ac.routeId = null;
     ac.landingEnd = null;
-    ac.path = points;
+    ac.path = path;
     ac.pathEnd = NO_PATH_END;
     switch (plan.kind) {
+      case 'hold':
+        if (path.length) ac.pathEnd = { type: 'hold', hold: plan.hold };
+        else ac.hold = plan.hold;
+        break;
       case 'join':
         ac.pathEnd = { type: 'route', routeId: plan.route.id };
         if (plan.route.kind === 'arr' && plan.route.endId) clearForApproach(ac, plan.route.endId);
@@ -291,8 +310,8 @@ export class Game {
 
   toggleHold(ac: Aircraft): void {
     if (!this.canControl(ac)) return;
-    ac.holding = !ac.holding;
-    if (ac.holding) {
+    ac.hold = ac.hold ? null : holdHere(ac);
+    if (ac.hold) {
       ac.path = [];
       ac.pathEnd = NO_PATH_END;
       ac.landingEnd = null;
@@ -680,7 +699,7 @@ export class Game {
       path: [],
       pathEnd: NO_PATH_END,
       routeId: null,
-      holding: false,
+      hold: null,
       landingEnd: null,
       runwayEnd: null,
       gate: null,

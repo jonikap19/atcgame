@@ -2,6 +2,7 @@ import type { Aircraft } from '../sim/aircraft';
 import { type RunwayEnd, conePolygon, gateOutHeading, gatePoint, gateSegment } from '../sim/airport';
 import { KT_TO_UPS, LOW_FUEL, ROUTE_ENTRY_R, SEP_H, WORLD_H, WORLD_W } from '../sim/constants';
 import type { Game, PathPlan } from '../sim/game';
+import type { Hold } from '../sim/pathfit';
 import { type Vec, headingVec, vec } from '../sim/geom';
 import { classifyRoute, simplify } from '../sim/routes';
 import type { UiState } from '../ui/state';
@@ -266,12 +267,14 @@ export class Renderer {
     }
     this.ctx.globalAlpha = 1;
 
+    const hold = ac.hold ?? (ac.pathEnd.type === 'hold' ? ac.pathEnd.hold : null);
+    if (hold) this.drawHold(hold, selected ? C.sel : base, selected ? 0.8 : 0.4);
     if (ac.path.length) {
       const pts = [ac.pos, ...ac.path];
       this.line(pts, selected ? C.sel : base, selected ? 1.5 : 1, selected ? [] : [3, 5]);
       const target = ac.landingEnd ?? (ac.pathEnd.type === 'land' ? ac.pathEnd.endId : null);
       if (target) this.line([pts[pts.length - 1], game.airport.ends[target].threshold], C.good, 1, [2, 4]);
-    } else if (ac.phase === 'enroute' && !ac.holding) {
+    } else if (ac.phase === 'enroute' && !ac.hold) {
       // Where the plane will be in 20 seconds on its current heading.
       const d = ac.speed * KT_TO_UPS * 20;
       const v = headingVec(ac.heading);
@@ -318,15 +321,27 @@ export class Renderer {
     ctx.fill();
     ctx.restore();
 
-    if (ac.holding) {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 18, 0, Math.PI * 1.5);
-      ctx.strokeStyle = color;
-      ctx.setLineDash([2, 3]);
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.setLineDash([]);
+  }
+
+  /** A dashed hold circle with arrowheads showing which way round it goes. */
+  private drawHold(hold: Hold, color: string, alpha: number): void {
+    const ctx = this.ctx;
+    const c = this.S(hold.center);
+    const r = hold.radius * this.view.scale;
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+    ctx.setLineDash([4, 5]);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    for (const bearing of [45, 225]) {
+      const at = vec(hold.center.x + headingVec(bearing).x * hold.radius, hold.center.y + headingVec(bearing).y * hold.radius);
+      const dir = headingVec(bearing + 90 * hold.dir);
+      this.arrowHead(vec(at.x - dir.x * 10, at.y - dir.y * 10), at, color);
     }
+    ctx.globalAlpha = 1;
   }
 
   private labelLines(game: Game, ac: Aircraft): string[] {
@@ -344,7 +359,7 @@ export class Renderer {
     const routeId = ac.routeId ?? (ac.pathEnd.type === 'route' ? ac.pathEnd.routeId : null);
     const route = routeId ? game.routes.find((r) => r.id === routeId) : null;
     if (route) tags.push(route.name);
-    if (ac.holding) tags.push('HOLD');
+    if (ac.hold || ac.pathEnd.type === 'hold') tags.push('HOLD');
     if (ac.kind === 'arr' && ac.fuel < LOW_FUEL) tags.push(`FUEL ${fmtTime(ac.fuel)}`);
     return [ac.callsign, `${altPart} ${spdPart}`, tags.join(' ')].filter(Boolean);
   }
@@ -428,11 +443,14 @@ export class Renderer {
     }
     const ac = game.aircraft.find((a) => a.id === s.aircraftId);
     if (!ac) return;
-    const path = game.pathFromStroke(ac, s.points);
-    if (path.length === 0) return;
-    const plan: PathPlan = game.planPath(ac, path);
+    const result = game.strokePlan(ac, s.points);
+    if (!result) return;
+    const { path } = result;
+    const plan: PathPlan = result.plan;
     const [color, label] =
-      plan.kind === 'land'
+      plan.kind === 'hold'
+        ? [C.sel, `HOLD ${plan.hold.dir > 0 ? 'CLOCKWISE' : 'ANTICLOCKWISE'}`]
+        : plan.kind === 'land'
         ? plan.tooHigh
           ? [C.warn, `TOO HIGH FOR ${plan.end.id} — DESCEND OR EXTEND`]
           : [C.good, `CLEARED TO LAND ${plan.end.id}`]
@@ -446,6 +464,7 @@ export class Renderer {
     this.line(s.points, color, 1.5);
     this.ctx.globalAlpha = 1;
     this.line([ac.pos, ...path], color, 2);
+    if (plan.kind === 'hold') this.drawHold(plan.hold, color, 0.9);
     if (label) this.hint(label, lp, color);
   }
 

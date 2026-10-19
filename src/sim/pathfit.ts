@@ -1,5 +1,5 @@
 import { KT_TO_UPS, TURN_RATE } from './constants';
-import { type Vec, add, dist, dot, headingVec, mul, sub } from './geom';
+import { type Vec, add, angleDiff, dist, dot, headingTo, headingVec, mul, pathLength, sub } from './geom';
 import { simplify } from './routes';
 
 /** Radius of the circle a plane flies when turning at full rate. */
@@ -98,4 +98,86 @@ export function fitTrack(pos: Vec, heading: number, speedKt: number, raw: Vec[])
   const lead: Vec[] = [];
   for (let s = 1; s < steps; s++) lead.push(cubic(pos, c1, c2, join, s / steps));
   return [...lead, ...track.slice(j)].filter((p) => dist(p, pos) > 12);
+}
+
+/** A circle a plane orbits. `dir` 1 = clockwise (right turns), -1 = anticlockwise. */
+export interface Hold {
+  center: Vec;
+  radius: number;
+  dir: 1 | -1;
+}
+
+export interface EndLoop {
+  /** The line before the loop (ends where the loop starts). */
+  lead: Vec[];
+  loop: Vec[];
+  hold: Hold;
+}
+
+function segmentsCross(a: Vec, b: Vec, c: Vec, d: Vec): boolean {
+  const cross = (o: Vec, p: Vec, q: Vec): number => (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x);
+  const d1 = cross(c, d, a);
+  const d2 = cross(c, d, b);
+  const d3 = cross(a, b, c);
+  const d4 = cross(a, b, d);
+  return d1 * d2 < 0 && d3 * d4 < 0;
+}
+
+/** Total turning along a polyline, in degrees. Positive = clockwise. */
+function winding(points: Vec[]): number {
+  let total = 0;
+  for (let i = 1; i < points.length - 1; i++) {
+    total += angleDiff(headingTo(points[i - 1], points[i]), headingTo(points[i], points[i + 1]));
+  }
+  return total;
+}
+
+const MIN_LOOP_LENGTH = 100;
+const CLOSE_GAP = 30;
+
+/**
+ * Detects a circle drawn at the end of a line. A loop counts when the line
+ * crosses (or comes back to) itself near its end and the closed part turns
+ * most of the way round.
+ */
+export function detectEndLoop(raw: Vec[]): EndLoop | null {
+  const pts = simplify(raw, 6);
+  if (pts.length < 8) return null;
+  const total = pathLength(pts);
+  const last = pts.length - 1;
+
+  const accept = (startIdx: number, endIdx: number): EndLoop | null => {
+    const loop = pts.slice(startIdx, endIdx + 1);
+    const length = pathLength(loop);
+    const turn = winding(loop);
+    if (length < MIN_LOOP_LENGTH || Math.abs(turn) < 270) return null;
+    const ring = resample([...loop, loop[0]], 6);
+    const center = {
+      x: ring.reduce((s, p) => s + p.x, 0) / ring.length,
+      y: ring.reduce((s, p) => s + p.y, 0) / ring.length,
+    };
+    const radius = ring.reduce((s, p) => s + dist(p, center), 0) / ring.length;
+    return { lead: pts.slice(0, startIdx + 1), loop, hold: { center, radius, dir: turn > 0 ? 1 : -1 } };
+  };
+
+  // The line crosses itself: look for a later segment (near the end) crossing an earlier one.
+  let tail = 0;
+  for (let k = last - 1; k >= 2; k--) {
+    tail += dist(pts[k], pts[k + 1]);
+    if (tail > Math.max(80, total * 0.3)) break;
+    for (let j = 0; j < k - 2; j++) {
+      if (segmentsCross(pts[j], pts[j + 1], pts[k], pts[k + 1])) {
+        const found = accept(j + 1, k);
+        if (found) return found;
+      }
+    }
+  }
+  // The line comes back to (almost) where the circle started without crossing.
+  for (let j = 0; j < last - 5; j++) {
+    if (dist(pts[last], pts[j]) <= CLOSE_GAP) {
+      const found = accept(j, last);
+      if (found) return found;
+    }
+  }
+  return null;
 }

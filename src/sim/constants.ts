@@ -8,7 +8,6 @@ export const WORLD_H = 1000;
 export const KT_TO_UPS = 0.12;
 
 export const TURN_RATE = 20; // deg/s
-export const HOLD_TURN_RATE = 13; // deg/s
 export const CLIMB_RATE = 260; // ft/s
 export const DESCENT_RATE = 260; // ft/s
 export const FINAL_DESCENT_RATE = 320; // ft/s
