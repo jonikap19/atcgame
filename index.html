@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Glidepath</title>
+    <meta name="theme-color" content="#0a141b" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap"
+    />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="scope" aria-label="Radar scope"></canvas>
+
+      <header id="topbar">
+        <div class="brand">
+          <span class="wordmark">GLIDEPATH</span>
+          <span class="airport" id="airport-name">HVL · HARROW VALE</span>
+        </div>
+        <dl class="stats">
+          <div><dt>SCORE</dt><dd id="st-score">0</dd></div>
+          <div><dt>TIME</dt><dd id="st-time">0:00</dd></div>
+          <div><dt>LANDED</dt><dd id="st-landed">0</dd></div>
+          <div><dt>DEPARTED</dt><dd id="st-departed">0</dd></div>
+        </dl>
+        <div class="wind" id="wind" title="Wind: planes land and take off into it">
+          <svg viewBox="-12 -12 24 24" width="26" height="26" aria-hidden="true">
+            <circle r="11" class="wind-ring" />
+            <path id="wind-arrow" d="M0 -8 L4 2 L0 0 L-4 2 Z" class="wind-arrow" />
+          </svg>
+          <div>
+            <div class="wind-val" id="wind-val">270° 10KT</div>
+            <div class="wind-rwy" id="wind-rwy">RWY 27L 27R</div>
+          </div>
+        </div>
+        <div class="controls">
+          <button id="btn-plan" class="btn" type="button" title="Draw and manage saved routes (P)">PLAN ROUTES</button>
+          <button id="btn-fast" class="btn" type="button" title="Toggle double speed (F)">2×</button>
+          <button id="btn-pause" class="btn" type="button" title="Pause (Space)">PAUSE</button>
+        </div>
+      </header>
+
+      <div id="banner" hidden></div>
+      <ol id="toasts" aria-live="polite"></ol>
+
+      <section id="deps" class="panel" aria-label="Departures">
+        <h2>DEPARTURES <span id="deps-count"></span></h2>
+        <ul id="strips"></ul>
+        <p class="empty" id="strips-empty">No departures waiting.</p>
+      </section>
+
+      <section id="sel" class="panel" aria-label="Selected aircraft" hidden></section>
+
+      <section id="plan" class="panel" aria-label="Route planning" hidden>
+        <h2>PLAN ROUTES</h2>
+        <p class="hint">
+          Draw a line on the map to save a route. End it in a landing cone for an
+          arrival route. Start it at the far end of a runway for a departure route.
+          Departures join a matching one by themselves.
+        </p>
+        <ul id="route-list"></ul>
+        <button id="btn-plan-done" class="btn btn-primary" type="button">DONE</button>
+      </section>
+
+      <div id="paused" class="pause-note" hidden>PAUSED · TAP THE MAP OR PRESS SPACE TO RESUME</div>
+
+      <div id="menu" class="overlay">
+        <div class="card">
+          <p class="eyebrow">APPROACH CONTROL · HVL HARROW VALE</p>
+          <h1>GLIDEPATH</h1>
+          <p class="lede">
+            Bring arrivals down onto the glide path, launch departures out through
+            their exit gates, and keep everyone 1000 ft or 3 miles apart.
+          </p>
+          <div class="seg" role="radiogroup" aria-label="Traffic">
+            <button type="button" class="seg-btn" data-diff="calm" role="radio">CALM</button>
+            <button type="button" class="seg-btn" data-diff="normal" role="radio">NORMAL</button>
+            <button type="button" class="seg-btn" data-diff="busy" role="radio">BUSY</button>
+          </div>
+          <button id="btn-start" class="btn btn-primary btn-big" type="button">START SHIFT</button>
+          <p class="best" id="best"></p>
+          <details class="howto">
+            <summary>HOW TO PLAY</summary>
+            <ul>
+              <li><b class="c-arr">Sand</b> planes are arrivals. Drag from one to draw its path. End the path inside a dashed landing cone to clear it to land.</li>
+              <li>Arrivals must be low enough to land. Each label shows <code>altitude↓target speed</code>, with altitude in hundreds of feet. Get them down to about 030 before the cone.</li>
+              <li>Tap a plane to change its altitude and speed. You can also use the arrow keys or the mouse wheel.</li>
+              <li><b class="c-dep">Blue</b> planes are departures. Launch them from the Departures panel, then route them out through their lettered exit gate, at 050 or higher.</li>
+              <li>The wind sometimes shifts. You get a warning first, then landings and takeoffs swap to the other end of the runways.</li>
+              <li>Save routes in Plan mode. Any plane can join a route: drag the plane onto the route's start ring.</li>
+              <li>A dashed amber ring means two planes will conflict soon. A red ring means they have, and you're losing points. If they touch, the shift is over.</li>
+            </ul>
+          </details>
+        </div>
+      </div>
+
+      <div id="over" class="overlay" hidden>
+        <div class="card">
+          <p class="eyebrow">SHIFT OVER</p>
+          <h1 id="over-reason">COLLISION</h1>
+          <p class="final-score"><span id="over-score">0</span> POINTS</p>
+          <p class="best" id="over-best"></p>
+          <dl class="over-stats" id="over-stats"></dl>
+          <div class="row">
+            <button id="btn-again" class="btn btn-primary btn-big" type="button">NEW SHIFT</button>
+            <button id="btn-menu" class="btn btn-big" type="button">MENU</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
